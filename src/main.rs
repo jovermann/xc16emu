@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Desktop window and headless capture commands for the Rust emulator.
 
+mod audio_output;
+
+use audio_output::AudioOutput;
 use minifb::{Key, MenuItemHandle, Scale, Window, WindowOptions};
 #[cfg(not(target_os = "macos"))]
 use minifb::{Menu, MenuHandle};
@@ -819,6 +822,16 @@ fn run() -> Result<(), String> {
         settings.border = border;
     }
     let (mut window, mut menus) = create_window(settings)?;
+    let audio = match AudioOutput::open() {
+        Ok(output) => {
+            machine.set_audio_sample_rate(output.sample_rate());
+            Some(output)
+        }
+        Err(error) => {
+            eprintln!("sound unavailable: {error}");
+            None
+        }
+    };
     if !config_path.exists() {
         save_settings(&config_path, settings);
     }
@@ -828,6 +841,7 @@ fn run() -> Result<(), String> {
     let mut meter_frames = machine.ted.frames;
     let mut mips = 0.0;
     let mut realtime = 0.0;
+    let audio_debug = env::var_os("XC16EMU_AUDIO_DEBUG").is_some();
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // A setting that changes the video crop or status area changes the
         // fixed-size minifb buffer, so it requires a new window.
@@ -837,6 +851,9 @@ fn run() -> Result<(), String> {
             match id {
                 RESET_ID => {
                     machine.reset();
+                    if let Some(audio) = &audio {
+                        audio.clear();
+                    }
                     meter_frames = machine.ted.frames;
                     meter_instructions = machine.instructions_executed;
                     meter_time = Instant::now();
@@ -890,6 +907,9 @@ fn run() -> Result<(), String> {
         }
         if window.is_key_pressed(Key::F12, minifb::KeyRepeat::No) {
             machine.reset();
+            if let Some(audio) = &audio {
+                audio.clear();
+            }
             meter_frames = machine.ted.frames;
             meter_instructions = machine.instructions_executed;
             meter_time = Instant::now();
@@ -905,6 +925,9 @@ fn run() -> Result<(), String> {
             }
         }
         machine.run_frames(1)?;
+        if let Some(audio) = &audio {
+            audio.push(machine.drain_audio_samples());
+        }
         let now = Instant::now();
         let elapsed = now.duration_since(meter_time).as_secs_f64();
         if elapsed >= 0.5 {
@@ -916,6 +939,14 @@ fn run() -> Result<(), String> {
             meter_time = now;
             meter_instructions = machine.instructions_executed;
             meter_frames = machine.ted.frames;
+            if audio_debug {
+                if let Some(audio) = &audio {
+                    let (queued, played_nonzero) = audio.debug_counts();
+                    eprintln!(
+                        "audio: {queued} queued samples, {played_nonzero} nonzero samples played"
+                    );
+                }
+            }
         }
         let (video_width, video_height) = settings.border.dimensions();
         let width = video_width * settings.zoom as usize;

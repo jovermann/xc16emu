@@ -72,6 +72,21 @@ fn arithmetic_and_for_loop_run_in_rom_basic() {
 }
 
 #[test]
+fn basic_sound_command_drives_ted_audio() {
+    let mut machine = booted();
+    machine.set_audio_sample_rate(48_000);
+    machine.type_text("VOL 8\n").unwrap();
+    machine.drain_audio_samples();
+    machine.type_text("SOUND 1,770,50\n").unwrap();
+    machine.run_frames(2).unwrap();
+    let samples = machine.drain_audio_samples();
+    assert!(samples.iter().any(|&sample| sample > 0.1));
+    assert!(samples.iter().any(|&sample| sample < -0.1));
+    machine.reset();
+    assert!(machine.drain_audio_samples().is_empty());
+}
+
+#[test]
 fn circle_draws_pixels_and_basic_selects_split_mode() {
     let mut machine = booted();
     machine.type_text("GRAPHIC 2,1\n").unwrap();

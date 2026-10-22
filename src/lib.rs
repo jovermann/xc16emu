@@ -3,6 +3,7 @@
 //! Portable C16/Plus/4 hardware core, independent of the desktop interface.
 
 mod cpu;
+mod sound;
 mod video;
 pub use cpu::Cpu;
 use std::{
@@ -67,6 +68,8 @@ pub struct Machine {
     pub instructions_executed: u64,
     /// TED state.
     pub ted: Ted,
+    /// TED audio oscillator and samples waiting for the desktop audio device.
+    sound: sound::Sound,
     /// Four pairs of 16 KiB ROMs, with missing optional banks zero-filled.
     roms: [Vec<u8>; 8],
     /// Lower ROM bank number.
@@ -145,6 +148,7 @@ impl Machine {
             cpu: Cpu::default(),
             instructions_executed: 0,
             ted: Ted::default(),
+            sound: sound::Sound::default(),
             roms,
             low_bank: 0,
             high_bank: 0,
@@ -175,6 +179,7 @@ impl Machine {
     /// Restart the machine without clearing RAM, as the original reset did.
     pub fn reset(&mut self) {
         self.ted = Ted::default();
+        self.sound.reset();
         self.ted.key_latch = 0xff;
         self.cpu = Cpu::default();
         self.cpu.pc = u16::from_le_bytes([self.roms[1][0x3ffc], self.roms[1][0x3ffd]]);
@@ -324,6 +329,18 @@ impl Machine {
         Ok(())
     }
 
+    /// Enable TED audio capture at the output device's sample rate. A rate of
+    /// zero disables capture, which keeps headless runs inexpensive by default.
+    pub fn set_audio_sample_rate(&mut self, sample_rate: u32) {
+        self.sound.set_sample_rate(sample_rate);
+    }
+
+    /// Take the mono, floating-point audio generated since the previous call.
+    /// Samples lie in the range -1 to 1 and can be tested without a GUI.
+    pub fn drain_audio_samples(&mut self) -> Vec<f32> {
+        self.sound.drain()
+    }
+
     /// Capture 40 by 25 screen codes as stable, human-readable ASCII text.
     pub fn capture_text_screen(&self) -> String {
         let base = ((self.ted.registers[0x14] & 0xf8) as usize) << 8;
@@ -422,6 +439,7 @@ impl Machine {
 
     /// Advance timers and render each completed raster line separately.
     fn advance_hardware(&mut self, cycles: u8) {
+        self.sound.advance(cycles, &self.ted.registers);
         for i in 0..3 {
             let reload = self.ted.reload[i];
             if reload == 0 {

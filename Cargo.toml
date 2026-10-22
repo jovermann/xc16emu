@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 minifb = "0.28"
+cpal = "0.18.2"
 
 [lib]
 name = "xc16emu"

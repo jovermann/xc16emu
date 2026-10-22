@@ -34,6 +34,17 @@ removes the frame rate limit. macOS window commands are under Window. F12 also
 resets; Escape exits. Letters, digits, cursor keys,
 Return, Shift, Control, Alt, F1–F3, Home and Tab map to C16 keys.
 
+Sound plays through the default system output device. TED's two square-wave
+voices, voice-two noise mode, volume control, and direct volume DAC mode are
+generated from emulated CPU time. Try `VOL 8` followed by
+`SOUND 1,770,50` in BASIC. If no audio device is available, the emulator still
+runs and prints a warning. Headless programs can call
+`set_audio_sample_rate` and `drain_audio_samples` to inspect mono audio
+without opening a window.
+If sound is unexpectedly quiet, check the macOS output volume and device.
+Launching with `XC16EMU_AUDIO_DEBUG=1 cargo run --release` prints the selected
+device and a count of nonzero samples sent to it.
+
 ## Headless capture
 
 ```sh
@@ -77,6 +88,8 @@ tests cover overflow and indexed page crossing.
 
 - `src/cpu.rs`: 6502-family instruction execution and flags.
 - `src/video.rs`: TED scan-line renderer.
+- `src/sound.rs`: TED audio synthesis and sample timing.
+- `src/audio_output.rs`: desktop audio output.
 - `src/lib.rs`: memory map, TED timing, keyboard, virtual drive, captures.
 - `src/main.rs`: macOS-compatible Rust window and command-line interface.
 - `BugsInTheOldCode.txt`: confirmed defects corrected during the port.
@@ -84,6 +97,7 @@ tests cover overflow and indexed page crossing.
 ## Current limits
 
 The TED advances by instruction cycles and renders at scan-line boundaries.
-It does not yet model every TED bus-steal phase or color subcycle. The original
-emulator had no audio engine, and this port also does not produce sound.
+It does not yet model every TED bus-steal phase or color subcycle. Sound is
+sampled at the output device rate; the high-frequency tone edges and noise
+shift-register taps are approximations rather than transistor-level emulation.
 The desktop window uses a native macOS menu bar for machine and view settings.
