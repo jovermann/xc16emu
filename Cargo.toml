@@ -1,0 +1,15 @@
+[package]
+name = "xc16emu-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+minifb = "0.28"
+
+[lib]
+name = "xc16emu"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xc16emu"
+path = "src/main.rs"
