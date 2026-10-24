@@ -1,11 +1,12 @@
-// Copyright (C) 2026 Johannes Overmann and contributors.
-// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Johannes Overmann.
+// SPDX-License-Identifier: BSL-1.0
 //! End-to-end checks against the ROM files supplied in old/roms.
 
 use std::process::Command;
 use xc16emu::{Machine, COMPACT_BORDER, COMPACT_HEIGHT, COMPACT_WIDTH, HEIGHT, WIDTH};
 
 /// Boot a fresh machine and let BASIC finish its banner.
+/// Arguments: none. Returns: booted machine.
 fn booted() -> Machine {
     let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms");
     let mut machine = Machine::from_rom_dir(roms).unwrap();
@@ -14,6 +15,8 @@ fn booted() -> Machine {
 }
 
 #[test]
+/// Check ROM startup text and nonblank video.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn basic_rom_reaches_ready_screen() {
     let machine = booted();
     let text = machine.capture_text_screen();
@@ -28,6 +31,8 @@ fn basic_rom_reaches_ready_screen() {
 }
 
 #[test]
+/// Check host keys affect isolated joystick reads on each port.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn keyboard_equivalents_drive_both_joystick_ports() {
     let mut machine =
         Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms")).unwrap();
@@ -51,6 +56,8 @@ fn keyboard_equivalents_drive_both_joystick_ports() {
 }
 
 #[test]
+/// Check Galaxy module load and entry point through the CLI.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn galaxy_module_loads_after_boot_and_starts_at_4000() {
     let output = Command::new(env!("CARGO_BIN_EXE_xc16emu"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -77,6 +84,8 @@ fn galaxy_module_loads_after_boot_and_starts_at_4000() {
 }
 
 #[test]
+/// Check TOM keeps its raster split and character set stable.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn tom_raster_irq_keeps_the_character_set_stable_each_frame() {
     let mut machine =
         Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms")).unwrap();
@@ -95,6 +104,8 @@ fn tom_raster_irq_keeps_the_character_set_stable_each_frame() {
 }
 
 #[test]
+/// Check all border settings surround every side of the picture.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn compact_window_has_border_on_all_four_sides() {
     let machine = booted();
     let border = machine.ted.registers[0x19] & 0x7f;
@@ -124,6 +135,8 @@ fn compact_window_has_border_on_all_four_sides() {
 }
 
 #[test]
+/// Check BASIC arithmetic and counted loops.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn arithmetic_and_for_loop_run_in_rom_basic() {
     let mut machine = booted();
     machine.type_text("PRINT 2+3*4\n").unwrap();
@@ -140,6 +153,8 @@ fn arithmetic_and_for_loop_run_in_rom_basic() {
 }
 
 #[test]
+/// Check BASIC SOUND creates TED samples in memory.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn basic_sound_command_drives_ted_audio() {
     let mut machine = booted();
     machine.set_audio_sample_rate(48_000);
@@ -155,6 +170,8 @@ fn basic_sound_command_drives_ted_audio() {
 }
 
 #[test]
+/// Check BASIC circle drawing and graphics/text split.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn circle_draws_pixels_and_basic_selects_split_mode() {
     let mut machine = booted();
     machine.type_text("GRAPHIC 2,1\n").unwrap();
@@ -178,6 +195,8 @@ fn circle_draws_pixels_and_basic_selects_split_mode() {
 }
 
 #[test]
+/// Check a BASIC sine plot changes graphics output.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn basic_sine_plot_changes_graphics_pixels() {
     let mut machine = booted();
     machine.type_text("GRAPHIC 2,1\n").unwrap();
@@ -190,6 +209,8 @@ fn basic_sine_plot_changes_graphics_pixels() {
 }
 
 #[test]
+/// Check the bundled PAINT program loads through IEC.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn supplied_paint_program_loads_from_virtual_drive() {
     let mut machine = booted();
     machine.set_drive_root(concat!(env!("CARGO_MANIFEST_DIR"), "/old"));
@@ -204,6 +225,8 @@ fn supplied_paint_program_loads_from_virtual_drive() {
 }
 
 #[test]
+/// Check line-accurate TED video-mode switching.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
 fn changing_ted_mode_mid_frame_changes_only_later_lines() {
     let mut machine = booted();
     machine.write(0xff06, 0x3b);

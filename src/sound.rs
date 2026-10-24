@@ -1,5 +1,5 @@
-// Copyright (C) 2026 Johannes Overmann and contributors.
-// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Johannes Overmann.
+// SPDX-License-Identifier: BSL-1.0
 //! TED's two tone generators and the second generator's noise mode.
 //!
 //! The machine calls `advance` after each CPU instruction. Register writes
@@ -25,6 +25,8 @@ pub(crate) struct Sound {
 }
 
 impl Default for Sound {
+    /// Initialize silent TED sound state.
+    /// Arguments: none. Returns: a sound generator with no output sample rate.
     fn default() -> Self {
         Self {
             sample_rate: 0,
@@ -38,6 +40,8 @@ impl Default for Sound {
 }
 
 impl Sound {
+    /// Set the output rate and clear pending samples and clock state.
+    /// Arguments: rate is samples per second; zero disables generation. Returns: nothing.
     pub(crate) fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = rate;
         self.sample_clock = 0;
@@ -45,16 +49,22 @@ impl Sound {
         self.samples.clear();
     }
 
+    /// Reset oscillators and buffers while preserving the output rate.
+    /// Arguments: the mutable sound generator. Returns: nothing.
     pub(crate) fn reset(&mut self) {
         let rate = self.sample_rate;
         *self = Self::default();
         self.sample_rate = rate;
     }
 
+    /// Take all samples generated since the last drain.
+    /// Arguments: the mutable sound generator. Returns: the pending mono samples.
     pub(crate) fn drain(&mut self) -> Vec<f32> {
         std::mem::take(&mut self.samples)
     }
 
+    /// Advance the sound clock with elapsed TED ticks.
+    /// Arguments: cycles is elapsed TED ticks; registers are the current TED register image. Returns: nothing; samples may be appended.
     pub(crate) fn advance(&mut self, cycles: u8, registers: &[u8; 64]) {
         if self.sample_rate == 0 {
             return;
@@ -73,6 +83,8 @@ impl Sound {
         }
     }
 
+    /// Mix the two TED voices or direct volume DAC.
+    /// Arguments: elapsed_cycles is TED ticks since the prior sample; r contains TED registers. Returns: one normalized mono sample.
     fn render_sample(&mut self, elapsed_cycles: u32, r: &[u8; 64]) -> f32 {
         let freqs = [
             u16::from(r[0x0e]) | (u16::from(r[0x12] & 3) << 8),
@@ -134,6 +146,8 @@ impl Sound {
 mod tests {
     use super::*;
 
+    /// Advance a test generator in six-tick steps.
+    /// Arguments: sound is the generator; r contains TED registers; cycles is the requested tick span. Returns: all newly generated samples.
     fn generate(sound: &mut Sound, r: &[u8; 64], cycles: usize) -> Vec<f32> {
         for _ in 0..cycles / 6 {
             sound.advance(6, r);
@@ -142,6 +156,8 @@ mod tests {
     }
 
     #[test]
+    /// Check sample count, tone frequency, volume, and DAC mode.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn samples_follow_pal_time_and_volume_control() {
         let mut sound = Sound::default();
         sound.set_sample_rate(48_000);
@@ -166,6 +182,8 @@ mod tests {
     }
 
     #[test]
+    /// Check reset preserves sample rate and discards buffered samples.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn reset_keeps_output_rate_and_clears_buffer() {
         let mut sound = Sound::default();
         sound.set_sample_rate(44_100);
@@ -180,6 +198,8 @@ mod tests {
     }
 
     #[test]
+    /// Check noise output and voice-two tone precedence.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn second_voice_noise_and_tone_priority() {
         let mut r = [0; 64];
         r[0x0f] = 0x02;

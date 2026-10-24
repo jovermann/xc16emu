@@ -1,5 +1,5 @@
-// Copyright (C) 2026 Johannes Overmann and contributors.
-// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Johannes Overmann.
+// SPDX-License-Identifier: BSL-1.0
 //! Desktop window and headless capture commands for the Rust emulator.
 
 mod audio_output;
@@ -38,6 +38,8 @@ enum BorderSize {
 }
 
 impl BorderSize {
+    /// Convert a border size choice into emulator pixels.
+    /// Arguments: self is the border size. Returns: pixels on each side.
     fn pixels(self) -> usize {
         match self {
             Self::Big => 32,
@@ -46,6 +48,8 @@ impl BorderSize {
         }
     }
 
+    /// Compute the full picture dimensions including borders.
+    /// Arguments: self is the border size. Returns: width and height in emulator pixels.
     fn dimensions(self) -> (usize, usize) {
         let border = self.pixels();
         (320 + border * 2, 200 + border * 2)
@@ -64,6 +68,8 @@ struct DesktopSettings {
 }
 
 impl Default for DesktopSettings {
+    /// Choose initial desktop display and sound settings.
+    /// Arguments: none. Returns: default desktop settings.
     fn default() -> Self {
         Self {
             zoom: 2,
@@ -79,6 +85,7 @@ impl Default for DesktopSettings {
 impl DesktopSettings {
     /// Read the small subset of TOML used by this file. Invalid or unknown
     /// values leave their defaults in place, so hand edits cannot break boot.
+    /// Arguments: input is TOML text. Returns: settings with defaults for missing values.
     fn parse_toml(input: &str) -> Self {
         let mut settings = Self::default();
         for line in input.lines() {
@@ -128,6 +135,8 @@ impl DesktopSettings {
         settings
     }
 
+    /// Serialize desktop choices for the settings file.
+    /// Arguments: self is the settings value. Returns: TOML text.
     fn to_toml(self) -> String {
         let border = match self.border {
             BorderSize::Big => "big",
@@ -141,12 +150,16 @@ impl DesktopSettings {
     }
 }
 
+/// Locate the per-user settings file from HOME.
+/// Arguments: none. Returns: path or an unset-HOME error.
 fn settings_path() -> Result<PathBuf, String> {
     env::var_os("HOME")
         .map(|home| PathBuf::from(home).join(".xc16emu.toml"))
         .ok_or("HOME is not set; cannot locate ~/.xc16emu.toml".to_string())
 }
 
+/// Load settings or use defaults when unavailable.
+/// Arguments: path is the settings-file location. Returns: parsed or default settings.
 fn load_settings(path: &std::path::Path) -> DesktopSettings {
     match fs::read_to_string(path) {
         Ok(input) => DesktopSettings::parse_toml(&input),
@@ -158,6 +171,8 @@ fn load_settings(path: &std::path::Path) -> DesktopSettings {
     }
 }
 
+/// Write the current desktop settings and report I/O failures.
+/// Arguments: path is the file location; settings is the value to save. Returns: nothing.
 fn save_settings(path: &std::path::Path, settings: DesktopSettings) {
     if let Err(error) = fs::write(path, settings.to_toml()) {
         eprintln!("xc16emu: could not save {}: {error}", path.display());
@@ -167,6 +182,8 @@ fn save_settings(path: &std::path::Path, settings: DesktopSettings) {
 /// Give a native macOS menu item a real checkmark. minifb exposes its Cocoa
 /// menu-item pointer but does not provide an API for changing its state.
 #[cfg(target_os = "macos")]
+/// Update a menu checkmark on the supported native backend.
+/// Arguments: item is the menu handle; checked is the desired state. Returns: nothing.
 fn set_menu_checked(item: MenuItemHandle, checked: bool) {
     use std::ffi::{c_char, c_void};
     #[link(name = "AppKit", kind = "framework")]
@@ -178,17 +195,27 @@ fn set_menu_checked(item: MenuItemHandle, checked: bool) {
     #[allow(clashing_extern_declarations)]
     #[link(name = "objc")]
     unsafe extern "C" {
+        /// Look up an Objective-C class by C string.
+        /// Arguments: name is the class name. Returns: class pointer or null.
         fn objc_getClass(name: *const c_char) -> *mut c_void;
+        /// Look up an Objective-C selector by C string.
+        /// Arguments: name is the selector name. Returns: selector pointer.
         fn sel_registerName(name: *const c_char) -> *mut c_void;
         #[link_name = "objc_msgSend"]
+        /// Send a state-setting Objective-C message.
+        /// Arguments: receiver is a menu item; selector names the method; state is its check state. Returns: nothing.
         fn objc_msg_send_state(receiver: *mut c_void, selector: *mut c_void, state: isize);
         #[link_name = "objc_msgSend"]
+        /// Send an Objective-C message with one object argument.
+        /// Arguments: receiver and selector identify the call; object is its argument. Returns: returned object pointer.
         fn objc_msg_send_object(
             receiver: *mut c_void,
             selector: *mut c_void,
             object: *mut c_void,
         ) -> *mut c_void;
         #[link_name = "objc_msgSend"]
+        /// Send a setter message with an object argument.
+        /// Arguments: receiver and selector identify the call; object is the new value. Returns: nothing.
         fn objc_msg_send_set_object(
             receiver: *mut c_void,
             selector: *mut c_void,
@@ -217,8 +244,10 @@ fn set_menu_checked(item: MenuItemHandle, checked: bool) {
     }
 }
 
-/// Other window backends use a text checkmark instead.
+/// Other window backends do not expose a checkmark setter here.
 #[cfg(not(target_os = "macos"))]
+/// Accept a checkmark change on backends without a native state API.
+/// Arguments: item is the menu handle; checked is the desired state. Returns: nothing.
 fn set_menu_checked(_item: MenuItemHandle, _checked: bool) {}
 
 /// The menu handles permit clean replacement when the display size changes.
@@ -234,6 +263,7 @@ struct WindowMenus {
 
 impl WindowMenus {
     /// Remove this window's top-level menus before changing the display size.
+    /// Arguments: self holds menu handles; window is the old window. Returns: nothing.
     fn remove(self, window: &mut Window) {
         #[cfg(target_os = "macos")]
         {
@@ -248,6 +278,7 @@ impl WindowMenus {
 }
 
 /// Build the window and its menus for the current desktop settings.
+/// Arguments: settings controls zoom, border, and status height. Returns: window and menu handles or an error.
 fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), String> {
     let DesktopSettings {
         zoom,
@@ -281,6 +312,8 @@ fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), Str
 /// On macOS, attach Machine and View without minifb's `add_menu`, which
 /// incorrectly designates each one as AppKit's Window menu.
 #[cfg(target_os = "macos")]
+/// Populate Machine, View, and Window menus from saved choices.
+/// Arguments: window is the host window; settings provides current check states. Returns: menu handles or an error.
 fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<WindowMenus, String> {
     let DesktopSettings {
         zoom,
@@ -336,6 +369,8 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
 
 /// Other minifb backends can use its ordinary menu API.
 #[cfg(not(target_os = "macos"))]
+/// Populate Machine, View, and Window menus from saved choices.
+/// Arguments: window is the host window; settings provides current check states. Returns: menu handles or an error.
 fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowMenus, String> {
     let DesktopSettings {
         zoom,
@@ -399,7 +434,11 @@ mod macos_menu {
     type Object = *mut c_void;
 
     unsafe extern "C" {
+        /// Create a minifb native menu.
+        /// Arguments: name is its C-string title. Returns: native menu pointer.
         fn mfb_create_menu(name: *const c_char) -> Object;
+        /// Append a minifb menu item or separator.
+        /// Arguments: menu is the destination; id and name identify it; enabled, key, and modifier set behavior. Returns: the native item handle.
         fn mfb_add_menu_item(
             menu: Object,
             id: i32,
@@ -413,20 +452,36 @@ mod macos_menu {
     #[allow(clashing_extern_declarations)]
     #[link(name = "objc")]
     unsafe extern "C" {
+        /// Look up an Objective-C class by C string.
+        /// Arguments: name is the class name. Returns: class pointer or null.
         fn objc_getClass(name: *const c_char) -> Object;
+        /// Look up an Objective-C selector by C string.
+        /// Arguments: name is the selector name. Returns: selector pointer.
         fn sel_registerName(name: *const c_char) -> Object;
         #[link_name = "objc_msgSend"]
+        /// Send a zero-argument Objective-C message.
+        /// Arguments: receiver and selector identify the call. Returns: returned object pointer.
         fn message_0(receiver: Object, selector: Object) -> Object;
         #[link_name = "objc_msgSend"]
         #[cfg(debug_assertions)]
+        /// Ask an Objective-C collection for its item count.
+        /// Arguments: receiver and selector identify the call. Returns: number of items.
         fn message_count(receiver: Object, selector: Object) -> isize;
         #[link_name = "objc_msgSend"]
+        /// Send an Objective-C message with a C-string argument.
+        /// Arguments: receiver and selector identify the call; value is the string. Returns: returned object pointer.
         fn message_cstr(receiver: Object, selector: Object, value: *const c_char) -> Object;
         #[link_name = "objc_msgSend"]
+        /// Send an Objective-C message with one object argument.
+        /// Arguments: receiver and selector identify the call; value is its argument. Returns: nothing.
         fn message_1(receiver: Object, selector: Object, value: Object);
         #[link_name = "objc_msgSend"]
+        /// Send an Objective-C message with an integer boolean.
+        /// Arguments: receiver and selector identify the call; value is the boolean. Returns: nothing.
         fn message_bool(receiver: Object, selector: Object, value: isize);
         #[link_name = "objc_msgSend"]
+        /// Send an Objective-C message with three object arguments.
+        /// Arguments: receiver and selector identify the call; first, second, third are arguments. Returns: returned object pointer.
         fn message_3(
             receiver: Object,
             selector: Object,
@@ -436,6 +491,8 @@ mod macos_menu {
         ) -> Object;
     }
 
+    /// Convert Rust text to an autoreleased NSString.
+    /// Arguments: text is UTF-8 source text. Returns: object pointer or a NUL error.
     fn string(text: &str) -> Result<Object, String> {
         let text = CString::new(text).map_err(|_| "menu title contains NUL".to_string())?;
         unsafe {
@@ -447,6 +504,8 @@ mod macos_menu {
         }
     }
 
+    /// Get the shared NSApplication object.
+    /// Arguments: none. Returns: application pointer.
     fn application() -> Object {
         unsafe {
             message_0(
@@ -456,10 +515,14 @@ mod macos_menu {
         }
     }
 
+    /// Get the active macOS menu bar.
+    /// Arguments: none. Returns: menu pointer.
     fn main_menu() -> Object {
         unsafe { message_0(application(), sel_registerName(c"mainMenu".as_ptr())) }
     }
 
+    /// Create a named native menu.
+    /// Arguments: title is the menu label. Returns: menu pointer or an error.
     pub fn new(title: &str) -> Result<Object, String> {
         let title = CString::new(title).map_err(|_| "menu title contains NUL".to_string())?;
         let menu = unsafe { mfb_create_menu(title.as_ptr()) };
@@ -472,6 +535,7 @@ mod macos_menu {
 
     /// minifb's item builder supplies its `onMenuPress:` action, so the
     /// existing `Window::is_menu_pressed` still receives these IDs.
+    /// Arguments: menu is the destination; label is visible text; id is the command identifier. Returns: item handle or an error.
     pub fn item(menu: Object, label: &str, id: usize) -> Result<MenuItemHandle, String> {
         let label = CString::new(label).map_err(|_| "menu item contains NUL".to_string())?;
         let handle = unsafe { mfb_add_menu_item(menu, id as i32, label.as_ptr(), true, 0x7f, 0) };
@@ -482,6 +546,8 @@ mod macos_menu {
         }
     }
 
+    /// Add a visual separator to a native menu.
+    /// Arguments: menu is the destination. Returns: nothing.
     pub fn separator(menu: Object) {
         unsafe {
             mfb_add_menu_item(menu, -1, c"".as_ptr(), true, 0x7f, 0);
@@ -489,6 +555,7 @@ mod macos_menu {
     }
 
     /// Add a top-level menu without changing `NSApp.windowsMenu`.
+    /// Arguments: menu is the native submenu. Returns: top-level item pointer or an error.
     pub fn attach(menu: Object) -> Result<Object, String> {
         let empty = string("")?;
         unsafe {
@@ -508,6 +575,8 @@ mod macos_menu {
         }
     }
 
+    /// Register the actual native Window menu with AppKit.
+    /// Arguments: menu is the Window menu pointer or null. Returns: nothing.
     pub fn set_window_menu(menu: Object) {
         unsafe {
             message_1(
@@ -520,6 +589,7 @@ mod macos_menu {
 
     /// Catch menu setup regressions during desktop development. System Window
     /// commands may grow later, but must never land in Machine or View.
+    /// Arguments: machine, view, and window are native menu pointers. Returns: nothing; debug assertions may fail.
     pub fn debug_check_layout(machine: Object, view: Object, window: Object) {
         #[cfg(debug_assertions)]
         unsafe {
@@ -535,6 +605,8 @@ mod macos_menu {
         let _ = (machine, view, window);
     }
 
+    /// Remove the three native top-level menu items and clear AppKit's Window menu.
+    /// Arguments: top_items contains Machine, View, and Window item pointers. Returns: nothing.
     pub fn remove(top_items: [Object; 3]) {
         set_window_menu(std::ptr::null_mut());
         unsafe {
@@ -546,6 +618,7 @@ mod macos_menu {
 }
 
 /// Five-by-seven glyphs shared by the status meter and joystick help panel.
+/// Arguments: character is the requested glyph. Returns: seven bitmap rows, or blank for unsupported characters.
 fn status_glyph(character: char) -> [u8; 7] {
     match character {
         'B' => [
@@ -654,6 +727,7 @@ fn status_glyph(character: char) -> [u8; 7] {
 }
 
 /// Draw a short status string directly into the RGB window buffer.
+/// Arguments: buffer is the output; width is row stride; x/y are origin; text is content; color is RGB. Returns: nothing.
 fn draw_status_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: &str, color: u32) {
     for (index, character) in text.chars().enumerate() {
         for (dy, row) in status_glyph(character).iter().enumerate() {
@@ -667,6 +741,7 @@ fn draw_status_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: 
 }
 
 /// Draw the same pixel font at twice its native size for readable help text.
+/// Arguments: buffer is the output; width is row stride; x/y are origin; text is content; color is RGB. Returns: nothing.
 fn draw_help_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: &str, color: u32) {
     for (index, character) in text.chars().enumerate() {
         for (dy, row) in status_glyph(character).iter().enumerate() {
@@ -684,6 +759,7 @@ fn draw_help_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: &s
 
 /// Opaque in-video key guide. It is redrawn after each emulated frame and
 /// never changes the machine's pixels or the unscaled status strip.
+/// Arguments: buffer is the output; width is row stride; video_height excludes status. Returns: nothing.
 fn draw_joystick_help(buffer: &mut [u32], width: usize, video_height: usize) {
     const PANEL_WIDTH: usize = 280;
     const PANEL_HEIGHT: usize = 190;
@@ -717,6 +793,7 @@ fn draw_joystick_help(buffer: &mut [u32], width: usize, video_height: usize) {
 }
 
 /// Scale only the C16 picture; status pixels are composed afterward at 1×.
+/// Arguments: buffer is the output; width is row stride; pixels are TED colors; video_width and zoom set layout. Returns: nothing.
 fn draw_video(buffer: &mut [u32], width: usize, pixels: &[u8], video_width: usize, zoom: usize) {
     for (y, row) in pixels.chunks_exact(video_width).enumerate() {
         for (x, &color) in row.iter().enumerate() {
@@ -730,6 +807,7 @@ fn draw_video(buffer: &mut [u32], width: usize, pixels: &[u8], video_width: usiz
 }
 
 /// A one-pixel gray outline separates the black status strip from the video.
+/// Arguments: buffer is the output; width is row stride; video_height locates the strip; mips/realtime are meters; sound_enabled sets icon. Returns: nothing.
 fn draw_status(
     buffer: &mut [u32],
     width: usize,
@@ -791,6 +869,7 @@ fn draw_status(
 }
 
 /// Parse a decimal frame count from a command-line option.
+/// Arguments: value is the optional argument string. Returns: frame count or an error.
 fn parse_frames(value: Option<String>) -> Result<u64, String> {
     value
         .ok_or("--frames needs a number".to_string())?
@@ -799,6 +878,7 @@ fn parse_frames(value: Option<String>) -> Result<u64, String> {
 }
 
 /// Monitor addresses are hexadecimal, with or without a $ or 0x prefix.
+/// Arguments: value is the optional address string. Returns: 16-bit address or an error.
 fn parse_go_address(value: Option<String>) -> Result<u16, String> {
     let value = value.ok_or("--go needs a hexadecimal address")?;
     let digits = value
@@ -811,6 +891,7 @@ fn parse_go_address(value: Option<String>) -> Result<u16, String> {
 }
 
 /// Translate a desktop key to the corresponding C16 matrix position.
+/// Arguments: key is the host key code. Returns: matrix index or None when unmapped.
 fn matrix_key(key: Key) -> Option<u8> {
     Some(match key {
         Key::Backspace | Key::Delete => 0,
@@ -878,6 +959,7 @@ fn matrix_key(key: Key) -> Option<u8> {
 }
 
 /// Parse options, boot the ROM, and run in capture or desktop mode.
+/// Arguments: CLI arguments and environment are read internally. Returns: success or a diagnostic error.
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
     let mut roms = PathBuf::from("old/roms");
@@ -1222,6 +1304,7 @@ fn run() -> Result<(), String> {
 }
 
 /// Print a clean diagnostic and exit nonzero on startup or emulation failure.
+/// Arguments: none. Returns: nothing; exits nonzero on failure.
 fn main() {
     if let Err(error) = run() {
         eprintln!("xc16emu: {error}");
@@ -1234,6 +1317,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Check settings serialization and invalid-input fallback.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn desktop_settings_round_trip_and_reject_invalid_values() {
         let settings = DesktopSettings {
             zoom: 4,
@@ -1256,6 +1341,8 @@ mod tests {
     }
 
     #[test]
+    /// Check zoom scales video but keeps status at native resolution.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn video_zoom_leaves_status_font_and_outline_at_one_pixel() {
         let zoom = 4;
         let width = 320 * zoom;
@@ -1283,6 +1370,8 @@ mod tests {
     }
 
     #[test]
+    /// Check help overlay fits compact video without touching status.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn joystick_help_fits_compact_video_and_leaves_status_clear() {
         let width = 336;
         let video_height = 216;

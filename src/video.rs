@@ -1,5 +1,5 @@
-// Copyright (C) 2026 Johannes Overmann and contributors.
-// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Johannes Overmann.
+// SPDX-License-Identifier: BSL-1.0
 //! TED scan-line renderer. Register changes take effect between individual lines.
 
 use crate::Machine;
@@ -23,11 +23,13 @@ pub(crate) const VISIBLE_Y: usize = Y_OFFSET + 3;
 
 impl Machine {
     /// Read one byte from physical RAM, with the configured RAM mirror.
+    /// Arguments: address is the video fetch address. Returns: the RAM byte.
     fn video_ram(&self, address: usize) -> u8 {
         self.ram[address & self.ram_mask as usize]
     }
 
     /// Read a glyph or bitmap byte from RAM or the selected ROM bank.
+    /// Arguments: address is the fetch address; rom chooses ROM when true. Returns: the fetched byte.
     fn video_bank(&self, address: usize, rom: bool) -> u8 {
         if !rom {
             return self.video_ram(address);
@@ -43,6 +45,7 @@ impl Machine {
     /// Render one PAL raster line into the persistent frame buffer.
     /// CPU instructions can change FF06/FF07 during the frame, so this method
     /// deliberately reads the mode registers anew on every call.
+    /// Arguments: raster is the emulated raster counter; display_line is the physical output row. Returns: nothing; the persistent pixel buffer changes.
     pub(crate) fn render_line(&mut self, raster: u16, display_line: u16) {
         let line = raster as usize;
         if line >= HEIGHT || display_line as usize >= HEIGHT {
@@ -169,6 +172,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Check full glyph indices and reverse-mode interpretation.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn reverse_mode_selects_full_character_index_when_disabled() {
         let mut machine =
             Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms")).unwrap();

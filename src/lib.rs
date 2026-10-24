@@ -1,5 +1,5 @@
-// Copyright (C) 2026 Johannes Overmann and contributors.
-// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Johannes Overmann.
+// SPDX-License-Identifier: BSL-1.0
 //! Portable C16/Plus/4 hardware core, independent of the desktop interface.
 
 mod cpu;
@@ -51,6 +51,8 @@ pub struct Ted {
 }
 
 impl Default for Ted {
+    /// Initialize TED registers, counters, and frame state.
+    /// Arguments: none. Returns: a fresh TED state.
     fn default() -> Self {
         Self {
             registers: [0; 64],
@@ -130,6 +132,7 @@ pub struct Machine {
 
 impl Machine {
     /// Load required BASIC and system ROMs and any available optional ROMs.
+    /// Arguments: path locates the ROM directory. Returns: a ready machine or an I/O/ROM-size error.
     pub fn from_rom_dir(path: impl AsRef<Path>) -> io::Result<Self> {
         let names = [
             "basrom.dat",
@@ -189,6 +192,7 @@ impl Machine {
     }
 
     /// Restart the machine without clearing RAM, as the original reset did.
+    /// Arguments: self is the mutable machine. Returns: nothing.
     pub fn reset(&mut self) {
         self.ted = Ted::default();
         self.sound.reset();
@@ -204,6 +208,7 @@ impl Machine {
     }
 
     /// Set a 16, 32, or 64 KiB model, clear physical RAM, and reset.
+    /// Arguments: kib is 16, 32, or 64 KiB. Returns: success or an invalid-size error.
     pub fn set_ram_size(&mut self, kib: u16) -> Result<(), &'static str> {
         self.ram_mask = match kib {
             16 => 0x3fff,
@@ -217,6 +222,7 @@ impl Machine {
     }
 
     /// Read CPU-visible memory, honoring ROM banking and I/O.
+    /// Arguments: address is the 16-bit CPU address. Returns: the selected byte.
     pub fn read(&mut self, address: u16) -> u8 {
         if (0xfd00..0xff40).contains(&address) {
             return self.read_io(address);
@@ -234,6 +240,7 @@ impl Machine {
     }
 
     /// Write RAM or a hardware register. Writes beneath ROM remain in RAM.
+    /// Arguments: address is the 16-bit CPU address; value is the byte to store. Returns: nothing.
     pub fn write(&mut self, address: u16, value: u8) {
         if (0xfd00..0xff40).contains(&address) {
             self.write_io(address, value);
@@ -243,6 +250,7 @@ impl Machine {
     }
 
     /// Load a Commodore PRG with its two-byte address prefix.
+    /// Arguments: data contains load address followed by bytes. Returns: load address or a malformed/oversize error.
     pub fn load_prg(&mut self, data: &[u8]) -> Result<u16, &'static str> {
         if data.len() < 2 {
             return Err("missing PRG address");
@@ -258,6 +266,7 @@ impl Machine {
     /// Restore the 64 KiB frozen-image format used by the old emulator.
     /// The snapshot stores a prepared stack frame; a short RAM trampoline
     /// restores A, X, Y and P, then returns to its saved program counter.
+    /// Arguments: data is the complete old-format snapshot. Returns: success or a size error.
     pub fn load_frozen_image(&mut self, data: &[u8]) -> Result<(), &'static str> {
         if data.len() != 65536 {
             return Err("frozen image must be exactly 65536 bytes");
@@ -275,21 +284,25 @@ impl Machine {
     }
 
     /// Choose the directory exposed to BASIC's DLOAD and DSAVE commands.
+    /// Arguments: path is the directory to expose. Returns: nothing.
     pub fn set_drive_root(&mut self, path: impl Into<PathBuf>) {
         self.drive_root = path.into();
     }
 
     /// Set a virtual-drive dry run that acknowledges saves without writing.
+    /// Arguments: enabled selects acknowledgement without writing. Returns: nothing.
     pub fn set_dry_run(&mut self, enabled: bool) {
         self.iec_dry_run = enabled;
     }
 
     /// Enable or disable virtual-drive diagnostic messages.
+    /// Arguments: enabled turns diagnostic messages on. Returns: nothing.
     pub fn set_verbose(&mut self, enabled: bool) {
         self.verbose = enabled;
     }
 
     /// Press or release one C16 matrix key, numbered 0 to 63.
+    /// Arguments: index is a key number from 0 to 63; pressed sets or clears it. Returns: nothing; out-of-range indices are ignored.
     pub fn set_key(&mut self, index: u8, pressed: bool) {
         if index >= 64 {
             return;
@@ -306,6 +319,7 @@ impl Machine {
     /// Type text through the emulated keyboard matrix. Each character is held
     /// and released for two PAL frames so the ROM's own scan sees both edges.
     /// This keeps BASIC integration tests independent of GUI event handling.
+    /// Arguments: text is the BASIC input to type. Returns: success or an unsupported-character/emulation error.
     pub fn type_text(&mut self, text: &str) -> Result<(), String> {
         for character in text.chars() {
             let (key, shift) = matrix_for_char(character)
@@ -325,6 +339,7 @@ impl Machine {
     }
 
     /// Execute one instruction and advance video and timers by its cycles.
+    /// Arguments: self is the mutable machine. Returns: consumed CPU cycles or an execution error.
     pub fn step(&mut self) -> Result<u8, String> {
         let cycles = self.step_cpu()?;
         self.instructions_executed += 1;
@@ -333,6 +348,7 @@ impl Machine {
     }
 
     /// Run complete PAL frames.
+    /// Arguments: count is the frame increment. Returns: success or an execution error.
     pub fn run_frames(&mut self, count: u64) -> Result<(), String> {
         let target = self.ted.frames + count;
         while self.ted.frames < target {
@@ -343,17 +359,20 @@ impl Machine {
 
     /// Enable TED audio capture at the output device's sample rate. A rate of
     /// zero disables capture, which keeps headless runs inexpensive by default.
+    /// Arguments: sample_rate is samples per second; zero disables capture. Returns: nothing.
     pub fn set_audio_sample_rate(&mut self, sample_rate: u32) {
         self.sound.set_sample_rate(sample_rate);
     }
 
     /// Take the mono, floating-point audio generated since the previous call.
     /// Samples lie in the range -1 to 1 and can be tested without a GUI.
+    /// Arguments: self is the mutable machine. Returns: samples accumulated since the previous drain.
     pub fn drain_audio_samples(&mut self) -> Vec<f32> {
         self.sound.drain()
     }
 
     /// Capture 40 by 25 screen codes as stable, human-readable ASCII text.
+    /// Arguments: self is the machine. Returns: 25 newline-separated 40-character rows.
     pub fn capture_text_screen(&self) -> String {
         let base = ((self.ted.registers[0x14] & 0xf8) as usize) << 8;
         let mut out = String::with_capacity(1024);
@@ -371,6 +390,7 @@ impl Machine {
 
     /// Capture 320 by 200 visible pixels as hexadecimal TED hue digits.
     /// A zero hue becomes a space, giving readable diffs for graphics tests.
+    /// Arguments: self is the machine. Returns: 200 newline-separated 320-character rows.
     pub fn capture_graphics_screen(&self) -> String {
         let mut out = String::with_capacity(64200);
         for y in 0..200 {
@@ -390,6 +410,7 @@ impl Machine {
     }
 
     /// Return the 320 by 200 visible region as color indices.
+    /// Arguments: self is the machine. Returns: 320 by 200 TED color indices.
     pub fn visible_pixels(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(64000);
         for y in video::VISIBLE_Y..video::VISIBLE_Y + 200 {
@@ -402,12 +423,14 @@ impl Machine {
 
     /// Return the active picture with an even 8-pixel TED border on every
     /// side. This is the buffer used by the `--small-border` desktop mode.
+    /// Arguments: self is the machine. Returns: 336 by 216 TED color indices.
     pub fn compact_pixels(&self) -> Vec<u8> {
         self.pixels_with_border(COMPACT_BORDER)
     }
 
     /// Return the 320 by 200 picture with an even border on all four sides.
     /// The full PAL buffer permits at most 56 pixels on each side.
+    /// Arguments: border is pixels per side and must fit the PAL buffer. Returns: cropped TED color indices.
     pub fn pixels_with_border(&self, border: usize) -> Vec<u8> {
         assert!(border <= video::VISIBLE_X && border <= video::VISIBLE_Y);
         let width = 320 + 2 * border;
@@ -422,6 +445,7 @@ impl Machine {
     }
 
     /// Convert a TED color number into 24-bit RGB for GUI display.
+    /// Arguments: color is the TED palette index. Returns: packed 24-bit RGB.
     pub fn rgb(color: u8) -> u32 {
         const HUES: [[u8; 3]; 16] = [
             [0, 0, 0],
@@ -450,6 +474,7 @@ impl Machine {
     }
 
     /// Advance TED time at the CPU's fast border and slow display rates.
+    /// Arguments: cycles is elapsed CPU cycles. Returns: nothing.
     fn advance_hardware(&mut self, cycles: u8) {
         let mut elapsed_ticks = 0u8;
         for _ in 0..cycles {
@@ -518,6 +543,7 @@ impl Machine {
     /// selected by the value written to FF08. This lets host keys substitute
     /// for either joystick even when a game isolates keyboard and joystick
     /// reads using separate selectors.
+    /// Arguments: joystick_select has active-low port selection bits. Returns: nothing; FF08 latch changes.
     fn scan_keyboard(&mut self, joystick_select: u8) {
         let mut keys = 0;
         for row in 0..8 {
@@ -541,6 +567,7 @@ impl Machine {
     }
 
     /// Read a memory-mapped device register.
+    /// Arguments: address is a mapped CPU address. Returns: register value.
     fn read_io(&mut self, address: u16) -> u8 {
         if address >= 0xff00 {
             return self.read_ted((address & 63) as u8);
@@ -562,6 +589,7 @@ impl Machine {
     }
 
     /// Write a memory-mapped device register.
+    /// Arguments: address is a mapped CPU address; value is the written byte. Returns: nothing.
     fn write_io(&mut self, address: u16, value: u8) {
         if address >= 0xff00 {
             self.write_ted((address & 63) as u8, value);
@@ -583,6 +611,7 @@ impl Machine {
     }
 
     /// Read an implemented TED register or its write-back value.
+    /// Arguments: reg is the TED register index. Returns: register value.
     fn read_ted(&self, reg: u8) -> u8 {
         let r = reg as usize;
         match reg {
@@ -600,6 +629,7 @@ impl Machine {
 
     /// Apply a TED write immediately. The next completed raster line sees
     /// the new mode, supporting BASIC's bitmap/text split screen.
+    /// Arguments: reg is the TED register index; value is the written byte. Returns: nothing.
     fn write_ted(&mut self, reg: u8, value: u8) {
         let r = reg as usize;
         self.ted.registers[r] = value;
@@ -642,6 +672,7 @@ impl Machine {
     }
 
     /// Implement the original virtual drive's IEC command protocol.
+    /// Arguments: reg is the IEC register index; value is the command/data byte. Returns: nothing.
     fn write_iec(&mut self, reg: u8, value: u8) {
         if reg == 0xf2 {
             self.iec[2] = if value == 0 { 255 } else { 0 };
@@ -727,6 +758,7 @@ impl Machine {
     }
 
     /// Resolve an IEC filename inside the configured virtual drive directory.
+    /// Arguments: self contains the IEC filename and drive directory. Returns: safe host path or None for an invalid name.
     fn iec_path(&self) -> Option<PathBuf> {
         let name = String::from_utf8_lossy(&self.iec_name);
         let name = name.rsplit(':').next().unwrap_or(&name);
@@ -742,6 +774,7 @@ impl Machine {
 }
 
 /// Turn Commodore screen codes into ASCII for deterministic assertions.
+/// Arguments: code is the screen byte. Returns: one printable character.
 fn screen_code_to_char(code: u8) -> char {
     match code & 0x7f {
         0 => '@',
@@ -757,6 +790,7 @@ fn screen_code_to_char(code: u8) -> char {
 }
 
 /// Map printable BASIC source text to a C16 matrix key and Shift state.
+/// Arguments: character is the desired typed symbol. Returns: key index and Shift state, or None if unsupported.
 fn matrix_for_char(character: char) -> Option<(u8, bool)> {
     let key = match character.to_ascii_uppercase() {
         'A' => 10,

@@ -1,5 +1,5 @@
-// Copyright (C) 2026 Johannes Overmann and contributors.
-// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Johannes Overmann.
+// SPDX-License-Identifier: BSL-1.0
 //! Host audio device adapter. The emulator core never calls a platform API.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -22,6 +22,8 @@ pub(crate) struct AudioOutput {
 }
 
 impl AudioOutput {
+    /// Open and start a stream on the default audio output device.
+    /// Arguments: none. Returns: an active output object or an error message.
     pub(crate) fn open() -> Result<Self, String> {
         let device = cpal::default_host()
             .default_output_device()
@@ -64,14 +66,20 @@ impl AudioOutput {
         })
     }
 
+    /// Read the negotiated output sample rate.
+    /// Arguments: self is the active audio output. Returns: samples per second.
     pub(crate) fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
+    /// Discard queued audio without closing the stream.
+    /// Arguments: self is the active audio output. Returns: nothing.
     pub(crate) fn clear(&self) {
         self.queue.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
+    /// Read output queue length and playback activity.
+    /// Arguments: self is the active audio output. Returns: queued sample count and played nonzero count.
     pub(crate) fn debug_counts(&self) -> (usize, u64) {
         (
             self.queue.lock().unwrap_or_else(|e| e.into_inner()).len(),
@@ -79,6 +87,8 @@ impl AudioOutput {
         )
     }
 
+    /// Append mono samples and bound queue latency.
+    /// Arguments: samples is the new mono sample block. Returns: nothing.
     pub(crate) fn push(&self, samples: Vec<f32>) {
         let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.extend(samples);
@@ -90,6 +100,8 @@ impl AudioOutput {
     }
 }
 
+/// Build the callback stream for one device sample type.
+/// Arguments: device is the target device; config sets rate and channels; queue supplies samples; played_nonzero tracks activity. Returns: the stream or an error message.
 fn build_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
