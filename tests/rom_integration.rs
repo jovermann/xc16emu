@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! End-to-end checks against the ROM files supplied in old/roms.
 
+use std::process::Command;
 use xc16emu::{Machine, COMPACT_BORDER, COMPACT_HEIGHT, COMPACT_WIDTH, HEIGHT, WIDTH};
 
 /// Boot a fresh machine and let BASIC finish its banner.
@@ -24,6 +25,32 @@ fn basic_rom_reaches_ready_screen() {
         pixels.iter().any(|pixel| *pixel != pixels[0]),
         "visible image is blank"
     );
+}
+
+#[test]
+fn galaxy_module_loads_after_boot_and_starts_at_4000() {
+    let output = Command::new(env!("CARGO_BIN_EXE_xc16emu"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args([
+            "--module",
+            "old/galaxy_0200-4007_module_start_with_g4000",
+            "--go",
+            "4000",
+            "--headless",
+            "--frames",
+            "100",
+            "--text",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let screen = String::from_utf8(output.stdout).unwrap();
+    assert!(screen.contains("1984"), "{screen}");
+    assert!(!screen.contains("READY."), "{screen}");
 }
 
 #[test]

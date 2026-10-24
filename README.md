@@ -63,6 +63,15 @@ additional frames after the 100-frame startup and any typed lines.
 ## Programs and the virtual drive
 
 `--prg FILE` copies a two-byte-address Commodore PRG directly into RAM.
+`--module FILE` loads the same format **after** BASIC has booted, so startup
+does not overwrite a module in low RAM. `--go HEX` starts executing at a
+hexadecimal address (bare `4000`, `$4000`, or `0x4000`). For the supplied
+Galaxy image, which loads at `$0200` and starts at `$4000`:
+
+```sh
+cargo run --release -- --module old/galaxy_0200-4007_module_start_with_g4000 --go 4000
+```
+
 For BASIC's `DLOAD` and `DSAVE`, `--drive DIR` exposes a host directory as
 device 8. Filenames are confined to that directory. `--dry-run` acknowledges
 drive saves without writing a file. `--verbose` reports drive file opens.

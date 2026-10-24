@@ -638,6 +638,18 @@ fn parse_frames(value: Option<String>) -> Result<u64, String> {
         .map_err(|_| "invalid frame count".to_string())
 }
 
+/// Monitor addresses are hexadecimal, with or without a $ or 0x prefix.
+fn parse_go_address(value: Option<String>) -> Result<u16, String> {
+    let value = value.ok_or("--go needs a hexadecimal address")?;
+    let digits = value
+        .strip_prefix('$')
+        .or_else(|| value.strip_prefix("0x"))
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(&value);
+    u16::from_str_radix(digits, 16)
+        .map_err(|_| format!("invalid --go address {value:?}; use hexadecimal, e.g. 4000"))
+}
+
 /// Translate a desktop key to the corresponding C16 matrix position.
 fn matrix_key(key: Key) -> Option<u8> {
     Some(match key {
@@ -714,6 +726,8 @@ fn run() -> Result<(), String> {
     let mut text = false;
     let mut graphics = false;
     let mut prg = None;
+    let mut module = None;
+    let mut go_address = None;
     let mut frozen_image = None;
     let mut typed = Vec::new();
     let mut ram = 64;
@@ -762,6 +776,8 @@ fn run() -> Result<(), String> {
                 headless = true;
             }
             "--prg" => prg = Some(PathBuf::from(args.next().ok_or("--prg needs a path")?)),
+            "--module" => module = Some(PathBuf::from(args.next().ok_or("--module needs a path")?)),
+            "--go" => go_address = Some(parse_go_address(args.next())?),
             "--frozen-image" => {
                 frozen_image = Some(PathBuf::from(
                     args.next().ok_or("--frozen-image needs a path")?,
@@ -776,7 +792,7 @@ fn run() -> Result<(), String> {
                     .map_err(|_| "invalid RAM size".to_string())?
             }
             "--help" | "-h" => {
-                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\nDesktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Free Run. The View menu controls the status bar, border size, and zoom. Escape closes the window; F12 resets the machine.");
+                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE] [--module FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--module loads a two-byte-address image after ROM startup; --go starts execution at a hexadecimal address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Free Run. The View menu controls the status bar, border size, and zoom. Escape closes the window; F12 resets the machine.");
                 return Ok(());
             }
             _ => return Err(format!("unknown option {arg}")),
@@ -799,6 +815,13 @@ fn run() -> Result<(), String> {
     for line in typed {
         machine.type_text(&line)?;
         machine.type_text("\n")?;
+    }
+    if let Some(path) = module {
+        let data = fs::read(path).map_err(|e| e.to_string())?;
+        machine.load_prg(&data).map_err(str::to_string)?;
+    }
+    if let Some(address) = go_address {
+        machine.cpu.pc = address;
     }
     if headless {
         machine.run_frames(frames)?;
