@@ -43,12 +43,15 @@ impl Machine {
     /// Render one PAL raster line into the persistent frame buffer.
     /// CPU instructions can change FF06/FF07 during the frame, so this method
     /// deliberately reads the mode registers anew on every call.
-    pub(crate) fn render_line(&mut self, raster: u16) {
+    pub(crate) fn render_line(&mut self, raster: u16, display_line: u16) {
         let line = raster as usize;
-        if line >= HEIGHT {
+        if line >= HEIGHT || display_line as usize >= HEIGHT {
             return;
         }
-        let row = (line + Y_OFFSET) % HEIGHT;
+        // The raster counter is writable. Programs such as TOM jump it
+        // backward or forward for IRQ effects, but the electron beam still
+        // advances to the next physical row of the output frame.
+        let row = (display_line as usize + Y_OFFSET) % HEIGHT;
         let start = row * WIDTH;
         let con1 = self.ted.registers[6];
         let con2 = self.ted.registers[7];
@@ -98,10 +101,19 @@ impl Machine {
                     multicolor,
                 )
             } else {
-                let glyph = if extended { code & 0x3f } else { code & 0x7f };
+                // With FF07 bit 7 set, TED uses all 256 glyph indices.
+                // Otherwise bit 7 requests a reversed glyph from the first
+                // 128. TOM switches this bit at the raster split.
+                let glyph = if extended {
+                    code & 0x3f
+                } else if con2 & 0x80 != 0 {
+                    code
+                } else {
+                    code & 0x7f
+                };
                 let address = char_base + glyph as usize * 8 + d % 8;
                 let mut pattern = self.video_bank(address, rom_chars);
-                if code & 0x80 != 0 && con2 & 0x80 == 0 {
+                if !multicolor && !extended && code & 0x80 != 0 && con2 & 0x80 == 0 {
                     pattern = !pattern;
                 }
                 if self.ted.frames & 16 != 0
@@ -149,5 +161,36 @@ impl Machine {
             self.pixels[start + X_OFFSET..start + X_OFFSET + 8].fill(border);
             self.pixels[start + X_OFFSET + 312..start + X_OFFSET + 320].fill(border);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reverse_mode_selects_full_character_index_when_disabled() {
+        let mut machine =
+            Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms")).unwrap();
+        machine.ted.registers[6] = 0x1b; // picture on, raster 3 is glyph row 0
+        machine.ted.registers[0x13] = 0x20; // character RAM at $2000
+        machine.ted.registers[0x14] = 0x08; // matrix at $0800
+        machine.ram[0x0800] = 1; // foreground color
+        machine.ram[0x0c00] = 0x80; // glyph 128, or reversed glyph 0
+        machine.ram[0x2000] = 0x80;
+        machine.ram[0x2400] = 0x80;
+        let pixel = (3 + Y_OFFSET) * WIDTH + X_OFFSET;
+
+        machine.ted.registers[7] = 0x88; // use all 256 character indices
+        machine.render_line(3, 3);
+        assert_eq!(machine.pixels[pixel], 1);
+
+        machine.ted.registers[7] = 0x08; // high bit reverses glyph 0
+        machine.render_line(3, 3);
+        assert_eq!(machine.pixels[pixel], 0);
+
+        machine.ted.registers[7] = 0x18; // multicolor mode masks bit 7, without reversing
+        machine.render_line(3, 3);
+        assert_eq!(machine.pixels[pixel], 1);
     }
 }

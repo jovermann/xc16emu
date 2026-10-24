@@ -14,8 +14,11 @@ pub use video::{COMPACT_BORDER, COMPACT_HEIGHT, COMPACT_WIDTH, HEIGHT, WIDTH};
 
 /// PAL raster lines per frame.
 pub const LINES_PER_FRAME: u16 = 312;
-/// TED clock cycles in one PAL raster line.
-const CYCLES_PER_LINE: u32 = 57;
+/// Nominal PAL TED timing ticks per wall-clock second.
+pub const PAL_TED_TICKS_PER_SECOND: u64 = 114 * LINES_PER_FRAME as u64 * 50;
+/// Half-speed TED ticks in one PAL raster line. The CPU can execute one
+/// cycle per tick in the border, or one cycle per two ticks during display.
+const TICKS_PER_LINE: u32 = 114;
 
 /// TED registers and timing state.
 pub struct Ted {
@@ -23,10 +26,16 @@ pub struct Ted {
     pub registers: [u8; 64],
     /// Current raster line, including the border.
     pub raster: u16,
-    /// Clock cycles into this raster line.
+    /// Output scanline, separate from the software-writable raster counter.
+    display_line: u16,
+    /// TED timing ticks into this raster line (114 ticks per PAL line).
     pub line_cycles: u32,
+    /// Unpaired TED tick for the three timers, which run at the slow clock.
+    timer_tick_remainder: u8,
     /// Number of frames completed.
     pub frames: u64,
+    /// Total elapsed TED ticks, unaffected by raster-counter writes.
+    pub ticks: u64,
     /// Programmed interrupt line.
     pub irq_line: u16,
     /// Pending interrupt sources.
@@ -46,8 +55,11 @@ impl Default for Ted {
         Self {
             registers: [0; 64],
             raster: 0,
+            display_line: 0,
             line_cycles: 0,
+            timer_tick_remainder: 0,
             frames: 0,
+            ticks: 0,
             irq_line: 0,
             irq: 0,
             irq_enable: 0,
@@ -437,15 +449,49 @@ impl Machine {
             | (h[2] as u32 * level / 128)
     }
 
-    /// Advance timers and render each completed raster line separately.
+    /// Advance TED time at the CPU's fast border and slow display rates.
     fn advance_hardware(&mut self, cycles: u8) {
-        self.sound.advance(cycles, &self.ted.registers);
+        let mut elapsed_ticks = 0u8;
+        for _ in 0..cycles {
+            // TED normally lets the CPU run at double clock speed outside
+            // the picture. The short slow region in a border line accounts
+            // for its fixed bus use; the longer one models display fetches.
+            let visible = self.ted.registers[6] & 0x10 != 0 && (3..203).contains(&self.ted.raster);
+            let slow = if visible {
+                (8..106).contains(&self.ted.line_cycles)
+            } else {
+                (52..62).contains(&self.ted.line_cycles)
+            };
+            let ticks = if slow { 2 } else { 1 };
+            elapsed_ticks += ticks;
+            self.ted.line_cycles += u32::from(ticks);
+            while self.ted.line_cycles >= TICKS_PER_LINE {
+                self.ted.line_cycles -= TICKS_PER_LINE;
+                self.render_line(self.ted.raster, self.ted.display_line);
+                self.ted.raster = (self.ted.raster + 1) % LINES_PER_FRAME;
+                self.ted.display_line += 1;
+                // Reprogramming the raster counter can shorten a frame.
+                // Keep output rows sequential and start a fresh output frame
+                // when the counter wraps, as the old emulator did.
+                if self.ted.raster == 0 || self.ted.display_line == LINES_PER_FRAME {
+                    self.ted.display_line = 0;
+                    self.ted.frames += 1;
+                }
+                if self.ted.raster == self.ted.irq_line {
+                    self.ted.irq |= 2;
+                }
+            }
+        }
+        self.ted.ticks += u64::from(elapsed_ticks);
+        self.sound.advance(elapsed_ticks, &self.ted.registers);
+        let timer_ticks = u16::from(self.ted.timer_tick_remainder) + u16::from(elapsed_ticks);
+        self.ted.timer_tick_remainder = (timer_ticks & 1) as u8;
         for i in 0..3 {
             let reload = self.ted.reload[i];
             if reload == 0 {
                 continue;
             }
-            let mut left = cycles as u16;
+            let mut left = timer_ticks / 2;
             while left > 0 {
                 let timer = if self.ted.timer[i] == 0 {
                     reload
@@ -460,19 +506,6 @@ impl Machine {
                 }
             }
         }
-        self.ted.line_cycles += cycles as u32;
-        while self.ted.line_cycles >= CYCLES_PER_LINE {
-            self.ted.line_cycles -= CYCLES_PER_LINE;
-            self.render_line(self.ted.raster);
-            self.ted.raster += 1;
-            if self.ted.raster == LINES_PER_FRAME {
-                self.ted.raster = 0;
-                self.ted.frames += 1;
-            }
-            if self.ted.raster == self.ted.irq_line {
-                self.ted.irq |= 2;
-            }
-        }
         if self.ted.irq & self.ted.irq_enable != 0 {
             self.ted.irq |= 0x80;
             if self.cpu.p & 4 == 0 {
@@ -481,13 +514,28 @@ impl Machine {
         }
     }
 
-    /// Latch all selected keyboard rows when FF08 is written.
-    fn scan_keyboard(&mut self) {
+    /// Latch keyboard rows selected at FD30 and virtual joystick ports
+    /// selected by the value written to FF08. This lets host keys substitute
+    /// for either joystick even when a game isolates keyboard and joystick
+    /// reads using separate selectors.
+    fn scan_keyboard(&mut self, joystick_select: u8) {
         let mut keys = 0;
         for row in 0..8 {
             if self.key_port & (1 << row) == 0 {
                 keys |= self.key_matrix[row];
             }
+        }
+        // The port signals share keyboard-matrix bit positions. Joy 1 uses
+        // 5/R/D/6/T; Joy 2 uses 3/W/A/4/Shift. Bit 2 means left and bit 3
+        // means right, regardless of the old README's swapped directions.
+        if joystick_select & 0x04 == 0 {
+            let row = self.key_matrix[2];
+            keys |= row & 0x0f; // up, down, left, right
+            keys |= row & 0x40; // fire
+        }
+        if joystick_select & 0x02 == 0 {
+            let row = self.key_matrix[1];
+            keys |= row & 0x8f; // four directions and Shift/fire
         }
         self.ted.key_latch = !keys;
     }
@@ -565,7 +613,7 @@ impl Machine {
                 }
                 self.ted.timer[r / 2] = *timer;
             }
-            0x08 => self.scan_keyboard(),
+            0x08 => self.scan_keyboard(value),
             0x09 => {
                 self.ted.irq &= !(value & 0x7f);
                 if self.ted.irq & 0x7f == 0 {
@@ -576,7 +624,15 @@ impl Machine {
                 self.ted.irq_enable = value & 0x5e;
                 self.ted.irq_line = (self.ted.irq_line & 255) | (((value & 1) as u16) << 8);
             }
-            0x0b => self.ted.irq_line = (self.ted.irq_line & 0x100) | value as u16,
+            0x0b => {
+                self.ted.irq_line = (self.ted.irq_line & 0x100) | value as u16;
+                // TED compares against the current line as well as at line
+                // boundaries. TOM arms the next raster IRQ after entering
+                // that line; a boundary-only check misses every second IRQ.
+                if self.ted.raster == self.ted.irq_line {
+                    self.ted.irq |= 2;
+                }
+            }
             0x1c => self.ted.raster = (self.ted.raster & 255) | (((value & 1) as u16) << 8),
             0x1d => self.ted.raster = (self.ted.raster & 0x100) | value as u16,
             0x3e => self.ram_enabled = false,

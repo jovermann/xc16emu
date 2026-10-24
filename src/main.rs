@@ -13,7 +13,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-use xc16emu::Machine;
+use xc16emu::{Machine, PAL_TED_TICKS_PER_SECOND};
 
 /// One-pixel outline, one-pixel inset, seven-pixel font, and bottom inset.
 const STATUS_HEIGHT: usize = 11;
@@ -26,6 +26,8 @@ const COMPACT_BORDER_ID: usize = 6;
 const ZOOM_1_ID: usize = 7;
 const ZOOM_2_ID: usize = 8;
 const ZOOM_4_ID: usize = 9;
+const SOUND_ID: usize = 10;
+const JOYSTICK_HELP_ID: usize = 11;
 
 /// The border widths are measured in emulator pixels on every side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +58,9 @@ struct DesktopSettings {
     zoom: u8,
     border: BorderSize,
     show_status: bool,
+    show_joystick_help: bool,
     free_run: bool,
+    sound_enabled: bool,
 }
 
 impl Default for DesktopSettings {
@@ -65,7 +69,9 @@ impl Default for DesktopSettings {
             zoom: 2,
             border: BorderSize::Big,
             show_status: true,
+            show_joystick_help: false,
             free_run: false,
+            sound_enabled: true,
         }
     }
 }
@@ -101,9 +107,19 @@ impl DesktopSettings {
                     "false" => settings.show_status = false,
                     _ => {}
                 },
+                "joystick_help" => match value {
+                    "true" => settings.show_joystick_help = true,
+                    "false" => settings.show_joystick_help = false,
+                    _ => {}
+                },
                 "free_run" => match value {
                     "true" => settings.free_run = true,
                     "false" => settings.free_run = false,
+                    _ => {}
+                },
+                "sound" => match value {
+                    "true" => settings.sound_enabled = true,
+                    "false" => settings.sound_enabled = false,
                     _ => {}
                 },
                 _ => {}
@@ -119,8 +135,8 @@ impl DesktopSettings {
             BorderSize::Compact => "compact",
         };
         format!(
-            "zoom = {}\nborder = \"{}\"\nstatus_bar = {}\nfree_run = {}\n",
-            self.zoom, border, self.show_status, self.free_run
+            "zoom = {}\nborder = \"{}\"\nstatus_bar = {}\njoystick_help = {}\nfree_run = {}\nsound = {}\n",
+            self.zoom, border, self.show_status, self.show_joystick_help, self.free_run, self.sound_enabled
         )
     }
 }
@@ -212,6 +228,8 @@ struct WindowMenus {
     #[cfg(not(target_os = "macos"))]
     handles: [MenuHandle; 3],
     free_run_item: MenuItemHandle,
+    sound_item: MenuItemHandle,
+    joystick_help_item: MenuItemHandle,
 }
 
 impl WindowMenus {
@@ -268,18 +286,26 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         zoom,
         border,
         show_status,
+        show_joystick_help,
         free_run,
+        sound_enabled,
     } = settings;
     let machine = macos_menu::new("Machine")?;
     macos_menu::item(machine, "Reset", RESET_ID)?;
     macos_menu::separator(machine);
     let free_run_item = macos_menu::item(machine, "Free Run", FREE_RUN_ID)?;
     set_menu_checked(free_run_item, free_run);
+    macos_menu::separator(machine);
+    let sound_item = macos_menu::item(machine, "Sound", SOUND_ID)?;
+    set_menu_checked(sound_item, sound_enabled);
     let machine_top = macos_menu::attach(machine)?;
 
     let view = macos_menu::new("View")?;
     let status_item = macos_menu::item(view, "Show Status Bar", STATUS_ID)?;
     set_menu_checked(status_item, show_status);
+    let joystick_help_item =
+        macos_menu::item(view, "Show Joystick Keys (Break)", JOYSTICK_HELP_ID)?;
+    set_menu_checked(joystick_help_item, show_joystick_help);
     macos_menu::separator(view);
     for (choice, label, id) in [
         (BorderSize::Big, "Border: Big", BIG_BORDER_ID),
@@ -303,6 +329,8 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
     Ok(WindowMenus {
         top_items: [machine_top, view_top, window_top],
         free_run_item,
+        sound_item,
+        joystick_help_item,
     })
 }
 
@@ -313,18 +341,27 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         zoom,
         border,
         show_status,
+        show_joystick_help,
         free_run,
+        sound_enabled,
     } = settings;
     let mut machine_menu = Menu::new("Machine").map_err(|e| e.to_string())?;
     machine_menu.add_item("Reset", RESET_ID).build();
     machine_menu.add_separator();
     let free_run_item = machine_menu.add_item("Free Run", FREE_RUN_ID).build();
     set_menu_checked(free_run_item, free_run);
+    machine_menu.add_separator();
+    let sound_item = machine_menu.add_item("Sound", SOUND_ID).build();
+    set_menu_checked(sound_item, sound_enabled);
     let machine_handle = window.add_menu(&machine_menu);
 
     let mut view_menu = Menu::new("View").map_err(|e| e.to_string())?;
     let status_item = view_menu.add_item("Show Status Bar", STATUS_ID).build();
     set_menu_checked(status_item, show_status);
+    let joystick_help_item = view_menu
+        .add_item("Show Joystick Keys (Break)", JOYSTICK_HELP_ID)
+        .build();
+    set_menu_checked(joystick_help_item, show_joystick_help);
     view_menu.add_separator();
     for (choice, label, id) in [
         (BorderSize::Big, "Border: Big", BIG_BORDER_ID),
@@ -346,6 +383,8 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
     Ok(WindowMenus {
         handles: [machine_handle, view_handle, window_handle],
         free_run_item,
+        sound_item,
+        joystick_help_item,
     })
 }
 
@@ -485,8 +524,8 @@ mod macos_menu {
         #[cfg(debug_assertions)]
         unsafe {
             let count = sel_registerName(c"numberOfItems".as_ptr());
-            debug_assert_eq!(message_count(machine, count), 3);
-            debug_assert_eq!(message_count(view, count), 9);
+            debug_assert_eq!(message_count(machine, count), 5);
+            debug_assert_eq!(message_count(view, count), 10);
             debug_assert_eq!(
                 message_0(application(), sel_registerName(c"windowsMenu".as_ptr())),
                 window
@@ -506,9 +545,48 @@ mod macos_menu {
     }
 }
 
-/// Minimal five-by-seven glyphs for the status meter; no host font is needed.
+/// Five-by-seven glyphs shared by the status meter and joystick help panel.
 fn status_glyph(character: char) -> [u8; 7] {
     match character {
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
         'M' => [
             0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
         ],
@@ -588,6 +666,56 @@ fn draw_status_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: 
     }
 }
 
+/// Draw the same pixel font at twice its native size for readable help text.
+fn draw_help_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: &str, color: u32) {
+    for (index, character) in text.chars().enumerate() {
+        for (dy, row) in status_glyph(character).iter().enumerate() {
+            for dx in 0..5 {
+                if row & (1 << (4 - dx)) != 0 {
+                    for scale_y in 0..2 {
+                        let start = (y + dy * 2 + scale_y) * width + x + index * 12 + dx * 2;
+                        buffer[start..start + 2].fill(color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Opaque in-video key guide. It is redrawn after each emulated frame and
+/// never changes the machine's pixels or the unscaled status strip.
+fn draw_joystick_help(buffer: &mut [u32], width: usize, video_height: usize) {
+    const PANEL_WIDTH: usize = 280;
+    const PANEL_HEIGHT: usize = 190;
+    let x = (width - PANEL_WIDTH) / 2;
+    let y = (video_height - PANEL_HEIGHT) / 2;
+    for row in y..y + PANEL_HEIGHT {
+        let pixels = &mut buffer[row * width + x..row * width + x + PANEL_WIDTH];
+        pixels.fill(if row == y || row == y + PANEL_HEIGHT - 1 {
+            0x77818b
+        } else {
+            0x101820
+        });
+        pixels[0] = 0x77818b;
+        pixels[PANEL_WIDTH - 1] = 0x77818b;
+    }
+    let text_x = x + 16;
+    for (offset, label, color) in [
+        (10, "JOYSTICK KEYS", 0xffffff),
+        (32, "PORT 1", 0x7fc5ff),
+        (48, "UP 5   DOWN R", 0xffffff),
+        (64, "LEFT D RIGHT 6", 0xffffff),
+        (80, "FIRE T", 0xffffff),
+        (104, "PORT 2", 0x7fc5ff),
+        (120, "UP 3   DOWN W", 0xffffff),
+        (136, "LEFT A RIGHT 4", 0xffffff),
+        (152, "FIRE SHIFT", 0xffffff),
+        (173, "BREAK TO CLOSE", 0x9ba9b5),
+    ] {
+        draw_help_text(buffer, width, text_x, y + offset, label, color);
+    }
+}
+
 /// Scale only the C16 picture; status pixels are composed afterward at 1×.
 fn draw_video(buffer: &mut [u32], width: usize, pixels: &[u8], video_width: usize, zoom: usize) {
     for (y, row) in pixels.chunks_exact(video_width).enumerate() {
@@ -602,7 +730,14 @@ fn draw_video(buffer: &mut [u32], width: usize, pixels: &[u8], video_width: usiz
 }
 
 /// A one-pixel gray outline separates the black status strip from the video.
-fn draw_status(buffer: &mut [u32], width: usize, video_height: usize, mips: f64, realtime: f64) {
+fn draw_status(
+    buffer: &mut [u32],
+    width: usize,
+    video_height: usize,
+    mips: f64,
+    realtime: f64,
+    sound_enabled: bool,
+) {
     let outline = 0x555555;
     buffer[video_height * width..(video_height + 1) * width].fill(outline);
     buffer[(video_height + STATUS_HEIGHT - 1) * width..(video_height + STATUS_HEIGHT) * width]
@@ -628,6 +763,31 @@ fn draw_status(buffer: &mut [u32], width: usize, video_height: usize, mips: f64,
         &format!("{realtime:.2}X"),
         0xffffff,
     );
+    // A fixed-size speaker stays at the right edge at every video zoom.
+    // White sound waves mean enabled; a gray slash means muted.
+    let speaker = [
+        0b00100, 0b01100, 0b11100, 0b11100, 0b11100, 0b01100, 0b00100,
+    ];
+    let waves = [
+        0b0001000, 0b0010010, 0b0100001, 0b0100001, 0b0100001, 0b0010010, 0b0001000,
+    ];
+    let x = width - 20;
+    for dy in 0..7 {
+        for dx in 0..5 {
+            if speaker[dy] & (1 << (4 - dx)) != 0 {
+                buffer[(y + dy) * width + x + dx] = if sound_enabled { 0xffffff } else { 0x888888 };
+            }
+        }
+        if sound_enabled {
+            for dx in 0..7 {
+                if waves[dy] & (1 << (6 - dx)) != 0 {
+                    buffer[(y + dy) * width + x + 6 + dx] = 0xffffff;
+                }
+            }
+        } else {
+            buffer[(y + dy) * width + x + 7 + dy] = 0x888888;
+        }
+    }
 }
 
 /// Parse a decimal frame count from a command-line option.
@@ -792,7 +952,7 @@ fn run() -> Result<(), String> {
                     .map_err(|_| "invalid RAM size".to_string())?
             }
             "--help" | "-h" => {
-                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE] [--module FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--module loads a two-byte-address image after ROM startup; --go starts execution at a hexadecimal address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Free Run. The View menu controls the status bar, border size, and zoom. Escape closes the window; F12 resets the machine.");
+                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE] [--module FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--module loads a two-byte-address image after ROM startup; --go starts execution at a hexadecimal address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Free Run. The View menu controls the status bar, border size, zoom, and joystick key help. Escape closes the window; Break/Pause (F15 on macOS) toggles joystick help; F12 resets the machine.");
                 return Ok(());
             }
             _ => return Err(format!("unknown option {arg}")),
@@ -844,24 +1004,30 @@ fn run() -> Result<(), String> {
     if let Some(border) = border_override {
         settings.border = border;
     }
-    let (mut window, mut menus) = create_window(settings)?;
-    let audio = match AudioOutput::open() {
-        Ok(output) => {
-            machine.set_audio_sample_rate(output.sample_rate());
-            Some(output)
+    let mut audio = if settings.sound_enabled {
+        match AudioOutput::open() {
+            Ok(output) => {
+                machine.set_audio_sample_rate(output.sample_rate());
+                Some(output)
+            }
+            Err(error) => {
+                eprintln!("sound unavailable: {error}");
+                settings.sound_enabled = false;
+                None
+            }
         }
-        Err(error) => {
-            eprintln!("sound unavailable: {error}");
-            None
-        }
+    } else {
+        None
     };
+    let (mut window, mut menus) = create_window(settings)?;
     if !config_path.exists() {
         save_settings(&config_path, settings);
     }
     let mut next_frame = Instant::now();
     let mut meter_time = next_frame;
     let mut meter_instructions = machine.instructions_executed;
-    let mut meter_frames = machine.ted.frames;
+    let mut meter_ticks = machine.ted.ticks;
+    let mut paced_ticks = machine.ted.ticks;
     let mut mips = 0.0;
     let mut realtime = 0.0;
     let audio_debug = env::var_os("XC16EMU_AUDIO_DEBUG").is_some();
@@ -877,22 +1043,49 @@ fn run() -> Result<(), String> {
                     if let Some(audio) = &audio {
                         audio.clear();
                     }
-                    meter_frames = machine.ted.frames;
+                    meter_ticks = machine.ted.ticks;
+                    paced_ticks = machine.ted.ticks;
                     meter_instructions = machine.instructions_executed;
                     meter_time = Instant::now();
+                    next_frame = meter_time;
                 }
                 FREE_RUN_ID => {
                     settings.free_run = !settings.free_run;
                     set_menu_checked(menus.free_run_item, settings.free_run);
                     persist_settings = true;
                     next_frame = Instant::now();
-                    meter_frames = machine.ted.frames;
+                    meter_ticks = machine.ted.ticks;
+                    paced_ticks = machine.ted.ticks;
                     meter_instructions = machine.instructions_executed;
                     meter_time = next_frame;
+                }
+                SOUND_ID => {
+                    if settings.sound_enabled {
+                        machine.set_audio_sample_rate(0);
+                        audio = None;
+                        settings.sound_enabled = false;
+                        persist_settings = true;
+                    } else {
+                        match AudioOutput::open() {
+                            Ok(output) => {
+                                machine.set_audio_sample_rate(output.sample_rate());
+                                audio = Some(output);
+                                settings.sound_enabled = true;
+                                persist_settings = true;
+                            }
+                            Err(error) => eprintln!("sound unavailable: {error}"),
+                        }
+                    }
+                    set_menu_checked(menus.sound_item, settings.sound_enabled);
                 }
                 STATUS_ID => {
                     settings.show_status = !settings.show_status;
                     recreate_window = true;
+                    persist_settings = true;
+                }
+                JOYSTICK_HELP_ID => {
+                    settings.show_joystick_help = !settings.show_joystick_help;
+                    set_menu_checked(menus.joystick_help_item, settings.show_joystick_help);
                     persist_settings = true;
                 }
                 BIG_BORDER_ID | MEDIUM_BORDER_ID | COMPACT_BORDER_ID => {
@@ -933,9 +1126,20 @@ fn run() -> Result<(), String> {
             if let Some(audio) = &audio {
                 audio.clear();
             }
-            meter_frames = machine.ted.frames;
+            meter_ticks = machine.ted.ticks;
+            paced_ticks = machine.ted.ticks;
             meter_instructions = machine.instructions_executed;
             meter_time = Instant::now();
+            next_frame = meter_time;
+        }
+        // macOS reports the Break key on many external keyboards as F15;
+        // other minifb backends report Pause directly.
+        if window.is_key_pressed(Key::Pause, minifb::KeyRepeat::No)
+            || window.is_key_pressed(Key::F15, minifb::KeyRepeat::No)
+        {
+            settings.show_joystick_help = !settings.show_joystick_help;
+            set_menu_checked(menus.joystick_help_item, settings.show_joystick_help);
+            save_settings(&config_path, settings);
         }
         for key in window.get_keys_pressed(minifb::KeyRepeat::No) {
             if let Some(index) = matrix_key(key) {
@@ -955,13 +1159,12 @@ fn run() -> Result<(), String> {
         let elapsed = now.duration_since(meter_time).as_secs_f64();
         if elapsed >= 0.5 {
             let instructions = machine.instructions_executed - meter_instructions;
-            let frames = machine.ted.frames - meter_frames;
+            let ticks = machine.ted.ticks - meter_ticks;
             mips = instructions as f64 / elapsed / 1_000_000.0;
-            // Each emulated PAL frame represents 20 ms of machine time.
-            realtime = frames as f64 * 0.020 / elapsed;
+            realtime = ticks as f64 / PAL_TED_TICKS_PER_SECOND as f64 / elapsed;
             meter_time = now;
             meter_instructions = machine.instructions_executed;
-            meter_frames = machine.ted.frames;
+            meter_ticks = machine.ted.ticks;
             if audio_debug {
                 if let Some(audio) = &audio {
                     let (queued, played_nonzero) = audio.debug_counts();
@@ -984,16 +1187,30 @@ fn run() -> Result<(), String> {
             video_width,
             settings.zoom as usize,
         );
+        if settings.show_joystick_help {
+            draw_joystick_help(&mut rgb, width, video_height);
+        }
         if settings.show_status {
-            draw_status(&mut rgb, width, video_height, mips, realtime);
+            draw_status(
+                &mut rgb,
+                width,
+                video_height,
+                mips,
+                realtime,
+                settings.sound_enabled,
+            );
         }
         window
             .update_with_buffer(&rgb, width, height)
             .map_err(|e| e.to_string())?;
         if settings.free_run {
             next_frame = Instant::now();
+            paced_ticks = machine.ted.ticks;
         } else {
-            next_frame += Duration::from_secs_f64(0.020 / speed);
+            let ticks = machine.ted.ticks - paced_ticks;
+            paced_ticks = machine.ted.ticks;
+            next_frame +=
+                Duration::from_secs_f64(ticks as f64 / PAL_TED_TICKS_PER_SECOND as f64 / speed);
             if let Some(wait) = next_frame.checked_duration_since(Instant::now()) {
                 std::thread::sleep(wait);
             } else {
@@ -1022,7 +1239,9 @@ mod tests {
             zoom: 4,
             border: BorderSize::Compact,
             show_status: false,
+            show_joystick_help: true,
             free_run: true,
+            sound_enabled: false,
         };
         assert_eq!(DesktopSettings::parse_toml(&settings.to_toml()), settings);
         let invalid = DesktopSettings::parse_toml(
@@ -1031,7 +1250,9 @@ mod tests {
         assert_eq!(invalid.zoom, 2);
         assert_eq!(invalid.border, BorderSize::Big);
         assert!(invalid.show_status);
+        assert!(!invalid.show_joystick_help);
         assert!(!invalid.free_run);
+        assert!(invalid.sound_enabled);
     }
 
     #[test]
@@ -1042,7 +1263,7 @@ mod tests {
         let mut buffer = vec![0; width * (video_height + STATUS_HEIGHT)];
         let pixels = vec![1; 320 * 200];
         draw_video(&mut buffer, width, &pixels, 320, zoom);
-        draw_status(&mut buffer, width, video_height, 1.007, 1.0);
+        draw_status(&mut buffer, width, video_height, 1.007, 1.0, true);
         assert_eq!(buffer[(video_height - 1) * width], Machine::rgb(1));
         assert!(buffer[video_height * width..(video_height + 1) * width]
             .iter()
@@ -1052,5 +1273,42 @@ mod tests {
         assert_eq!(buffer[(video_height + 2) * width + 10], 0x888888);
         assert_eq!(buffer[(video_height + 9) * width + 10], 0);
         assert_eq!(buffer[(video_height + 10) * width + 10], 0x555555);
+        assert_eq!(
+            buffer[(video_height + 2) * width + width - 20 + 2],
+            0xffffff
+        );
+        let mut muted = vec![0; width * (video_height + STATUS_HEIGHT)];
+        draw_status(&mut muted, width, video_height, 1.007, 1.0, false);
+        assert_eq!(muted[(video_height + 2) * width + width - 20 + 2], 0x888888);
+    }
+
+    #[test]
+    fn joystick_help_fits_compact_video_and_leaves_status_clear() {
+        let width = 336;
+        let video_height = 216;
+        let mut buffer = vec![0x123456; width * (video_height + STATUS_HEIGHT)];
+        draw_joystick_help(&mut buffer, width, video_height);
+        assert!(buffer[..width * video_height].contains(&0xffffff));
+        assert!(buffer[..width * video_height].contains(&0x7fc5ff));
+        assert!(buffer[width * video_height..]
+            .iter()
+            .all(|&pixel| pixel == 0x123456));
+        for label in [
+            "JOYSTICK KEYS",
+            "PORT 1",
+            "UP 5   DOWN R",
+            "LEFT D RIGHT 6",
+            "FIRE T",
+            "PORT 2",
+            "UP 3   DOWN W",
+            "LEFT A RIGHT 4",
+            "FIRE SHIFT",
+            "BREAK TO CLOSE",
+        ] {
+            assert!(label
+                .chars()
+                .filter(|c| *c != ' ')
+                .all(|c| status_glyph(c) != [0; 7]));
+        }
     }
 }

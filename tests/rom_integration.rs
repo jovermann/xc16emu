@@ -28,6 +28,29 @@ fn basic_rom_reaches_ready_screen() {
 }
 
 #[test]
+fn keyboard_equivalents_drive_both_joystick_ports() {
+    let mut machine =
+        Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms")).unwrap();
+    // Isolate joystick input from ordinary keyboard row scanning.
+    machine.write(0xfd30, 0xff);
+    for (port_select, keys, expected) in [
+        (0xfb, [16, 17, 18, 19, 22], 0x4f), // 5 R D 6 T: port 1
+        (0xfd, [8, 9, 10, 11, 15], 0x8f),   // 3 W A 4 Shift: port 2
+    ] {
+        for key in keys {
+            machine.set_key(key, true);
+        }
+        machine.write(0xff08, port_select);
+        assert_eq!(!machine.read(0xff08), expected);
+        machine.write(0xff08, 0xff);
+        assert_eq!(machine.read(0xff08), 0xff);
+        for key in keys {
+            machine.set_key(key, false);
+        }
+    }
+}
+
+#[test]
 fn galaxy_module_loads_after_boot_and_starts_at_4000() {
     let output = Command::new(env!("CARGO_BIN_EXE_xc16emu"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -51,6 +74,24 @@ fn galaxy_module_loads_after_boot_and_starts_at_4000() {
     let screen = String::from_utf8(output.stdout).unwrap();
     assert!(screen.contains("1984"), "{screen}");
     assert!(!screen.contains("READY."), "{screen}");
+}
+
+#[test]
+fn tom_raster_irq_keeps_the_character_set_stable_each_frame() {
+    let mut machine =
+        Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms")).unwrap();
+    machine
+        .load_frozen_image(include_bytes!("../old/tom_working_frozen_image_64k"))
+        .unwrap();
+    // The game sets a second raster interrupt during the current line. If
+    // that interrupt is lost, it returns to the ROM character set only on
+    // alternate frames and both the picture and music run at half speed.
+    for _ in 0..20 {
+        machine.run_frames(1).unwrap();
+        assert_eq!(machine.ted.registers[0x13], 0xd5);
+        assert_eq!(machine.ted.irq_line, 33);
+    }
+    assert!(machine.capture_text_screen().contains("TOM 16"));
 }
 
 #[test]

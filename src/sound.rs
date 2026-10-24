@@ -7,11 +7,13 @@
 //! mode changes. Audio samples are collected independently of the GUI so the
 //! chip can be tested without opening an output device.
 
-/// The CPU executes 57 cycles on each of 312 PAL lines, 50 times per second.
-const CPU_HZ: u64 = 57 * 312 * 50;
-/// One tone counter tick takes four CPU cycles. Each full square wave takes
+use crate::PAL_TED_TICKS_PER_SECOND;
+
+/// TED advances 114 half-speed ticks on each PAL line, 50 times per second.
+const TED_TICKS_HZ: u64 = PAL_TED_TICKS_PER_SECOND;
+/// One tone counter tick takes eight TED ticks. Each full square wave takes
 /// two counter periods. The 1023 setting wraps through a full 1024 counts.
-const TONE_HZ: f64 = CPU_HZ as f64 / 8.0;
+const TONE_HZ: f64 = TED_TICKS_HZ as f64 / 16.0;
 
 pub(crate) struct Sound {
     sample_rate: u32,
@@ -62,8 +64,8 @@ impl Sound {
         for _ in 0..cycles {
             self.cycles_since_sample += 1;
             self.sample_clock += self.sample_rate as u64;
-            if self.sample_clock >= CPU_HZ {
-                self.sample_clock -= CPU_HZ;
+            if self.sample_clock >= TED_TICKS_HZ {
+                self.sample_clock -= TED_TICKS_HZ;
                 let elapsed = std::mem::take(&mut self.cycles_since_sample);
                 let sample = self.render_sample(elapsed, registers);
                 self.samples.push(sample);
@@ -89,7 +91,7 @@ impl Sound {
             }
             let old_phase = self.phases[voice];
             let next =
-                old_phase + elapsed_cycles as f64 * TONE_HZ / (period as f64 * CPU_HZ as f64);
+                old_phase + elapsed_cycles as f64 * TONE_HZ / (period as f64 * TED_TICKS_HZ as f64);
             self.phases[voice] = next.fract();
             tone[voice] = if self.phases[voice] < 0.5 { 1.0 } else { -1.0 };
             if voice == 1 {
@@ -147,7 +149,7 @@ mod tests {
         r[0x0e] = 0x02; // tone one, register value 770
         r[0x12] = 0x03;
         r[0x11] = 0x18;
-        let samples = generate(&mut sound, &r, CPU_HZ as usize);
+        let samples = generate(&mut sound, &r, TED_TICKS_HZ as usize);
         assert_eq!(samples.len(), 48_000);
         assert!(samples.iter().any(|s| *s > 0.1));
         assert!(samples.iter().any(|s| *s < -0.1));
@@ -172,7 +174,7 @@ mod tests {
         sound.reset();
         assert!(sound.drain().is_empty());
         assert_eq!(
-            generate(&mut sound, &[0; 64], CPU_HZ as usize).len(),
+            generate(&mut sound, &[0; 64], TED_TICKS_HZ as usize).len(),
             44_100
         );
     }

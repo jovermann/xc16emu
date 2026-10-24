@@ -23,20 +23,27 @@ zoom; big (32 pixels), medium (16 pixels), or compact (8 pixels, one character
 cell) border; and
 whether to show the bottom status line. Its font and one-pixel outline stay at
 screen resolution as the video zoom changes. It shows measured millions of
-emulated CPU instructions per second (MIPS) and a realtime factor based on 50
-PAL frames per second (1.00X means realtime). `--small-border` starts in
+emulated CPU instructions per second (MIPS) and a realtime factor based on
+elapsed PAL TED ticks (1.00X means realtime). `--small-border` starts in
 compact mode and `--zoom 1|2|4` overrides the saved zoom for that launch. The
-menu choices for zoom, border, status bar, and Free Run are saved in
+menu choices for zoom, border, status bar, joystick help, Free Run, and Sound are saved in
 `~/.xc16emu.toml`. `--speed 0.5` and
 `--speed 2` change the target emulation speed from the default 50 PAL frames
-per second. The Machine menu can reset the computer or toggle Free Run, which
-removes the frame rate limit. macOS window commands are under Window. F12 also
+per second. The Machine menu can reset the computer, toggle Free Run (which
+removes the frame rate limit), or toggle Sound. The status line shows a white
+speaker when sound is on and a gray crossed-out speaker when muted. macOS
+window commands are under Window. F12 also
 resets; Escape exits. Letters, digits, cursor keys,
 Return, Shift, Control, Alt, F1–F3, Home and Tab map to C16 keys.
 
+The View menu or Break/Pause (F15 on macOS) shows and hides an in-window guide to the keyboard keys
+for both joystick ports. Port 1 uses 5/R/D/6 for up/down/left/right and T for
+fire. Port 2 uses 3/W/A/4 for up/down/left/right and Shift for fire. The guide
+stays visible until toggled off, and its setting is saved between launches.
+
 Sound plays through the default system output device. TED's two square-wave
 voices, voice-two noise mode, volume control, and direct volume DAC mode are
-generated from emulated CPU time. Try `VOL 8` followed by
+generated from emulated TED time. Try `VOL 8` followed by
 `SOUND 1,770,50` in BASIC. If no audio device is available, the emulator still
 runs and prints a warning. Headless programs can call
 `set_audio_sample_rate` and `drain_audio_samples` to inspect mono audio
@@ -105,7 +112,11 @@ tests cover overflow and indexed page crossing.
 
 ## Current limits
 
-The TED advances by instruction cycles and renders at scan-line boundaries.
+The TED advances in PAL raster ticks, allowing the CPU to run faster in the
+border than during display. It renders at scan-line boundaries and checks
+raster interrupts when a compare line is programmed during the current line.
+The renderer tracks output rows separately from the writable raster counter,
+and its character mode can use all 256 glyphs when reverse mode is disabled.
 It does not yet model every TED bus-steal phase or color subcycle. Sound is
 sampled at the output device rate; the high-frequency tone edges and noise
 shift-register taps are approximations rather than transistor-level emulation.
