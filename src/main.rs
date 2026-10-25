@@ -5,7 +5,7 @@
 mod audio_output;
 
 use audio_output::AudioOutput;
-use minifb::{Key, MenuItemHandle, Scale, Window, WindowOptions};
+use minifb::{Key, MenuItemHandle, MouseButton, MouseMode, Scale, Window, WindowOptions};
 #[cfg(not(target_os = "macos"))]
 use minifb::{Menu, MenuHandle};
 use std::{
@@ -18,7 +18,7 @@ use xc16emu::{Machine, PAL_TED_TICKS_PER_SECOND};
 /// One-pixel outline, one-pixel inset, seven-pixel font, and bottom inset.
 const STATUS_HEIGHT: usize = 11;
 const RESET_ID: usize = 1;
-const FREE_RUN_ID: usize = 2;
+const FAST_MODE_ID: usize = 2;
 const STATUS_ID: usize = 3;
 const BIG_BORDER_ID: usize = 4;
 const MEDIUM_BORDER_ID: usize = 5;
@@ -63,7 +63,7 @@ struct DesktopSettings {
     border: BorderSize,
     show_status: bool,
     show_joystick_help: bool,
-    free_run: bool,
+    fast_mode: bool,
     sound_enabled: bool,
 }
 
@@ -76,7 +76,7 @@ impl Default for DesktopSettings {
             border: BorderSize::Big,
             show_status: true,
             show_joystick_help: false,
-            free_run: false,
+            fast_mode: false,
             sound_enabled: true,
         }
     }
@@ -119,9 +119,9 @@ impl DesktopSettings {
                     "false" => settings.show_joystick_help = false,
                     _ => {}
                 },
-                "free_run" => match value {
-                    "true" => settings.free_run = true,
-                    "false" => settings.free_run = false,
+                "fast_mode" | "free_run" => match value {
+                    "true" => settings.fast_mode = true,
+                    "false" => settings.fast_mode = false,
                     _ => {}
                 },
                 "sound" => match value {
@@ -144,8 +144,8 @@ impl DesktopSettings {
             BorderSize::Compact => "compact",
         };
         format!(
-            "zoom = {}\nborder = \"{}\"\nstatus_bar = {}\njoystick_help = {}\nfree_run = {}\nsound = {}\n",
-            self.zoom, border, self.show_status, self.show_joystick_help, self.free_run, self.sound_enabled
+            "zoom = {}\nborder = \"{}\"\nstatus_bar = {}\njoystick_help = {}\nfast_mode = {}\nsound = {}\n",
+            self.zoom, border, self.show_status, self.show_joystick_help, self.fast_mode, self.sound_enabled
         )
     }
 }
@@ -256,7 +256,7 @@ struct WindowMenus {
     top_items: [*mut std::ffi::c_void; 3],
     #[cfg(not(target_os = "macos"))]
     handles: [MenuHandle; 3],
-    free_run_item: MenuItemHandle,
+    fast_mode_item: MenuItemHandle,
     sound_item: MenuItemHandle,
     joystick_help_item: MenuItemHandle,
 }
@@ -302,7 +302,7 @@ fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), Str
         },
     )
     .map_err(|e| e.to_string())?;
-    // The emulator's own PAL pacing controls the default rate. In Free Run,
+    // The emulator's own PAL pacing controls the default rate. In Fast Mode,
     // minifb must also avoid its independent update-loop rate limit.
     window.set_target_fps(0);
     let menus = build_menus(&mut window, settings)?;
@@ -320,14 +320,14 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         border,
         show_status,
         show_joystick_help,
-        free_run,
+        fast_mode,
         sound_enabled,
     } = settings;
     let machine = macos_menu::new("Machine")?;
     macos_menu::item(machine, "Reset", RESET_ID)?;
     macos_menu::separator(machine);
-    let free_run_item = macos_menu::item(machine, "Free Run", FREE_RUN_ID)?;
-    set_menu_checked(free_run_item, free_run);
+    let fast_mode_item = macos_menu::item(machine, "Fast Mode", FAST_MODE_ID)?;
+    set_menu_checked(fast_mode_item, fast_mode);
     macos_menu::separator(machine);
     let sound_item = macos_menu::item(machine, "Sound", SOUND_ID)?;
     set_menu_checked(sound_item, sound_enabled);
@@ -361,7 +361,7 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
     macos_menu::debug_check_layout(machine, view, window_menu);
     Ok(WindowMenus {
         top_items: [machine_top, view_top, window_top],
-        free_run_item,
+        fast_mode_item,
         sound_item,
         joystick_help_item,
     })
@@ -377,14 +377,14 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         border,
         show_status,
         show_joystick_help,
-        free_run,
+        fast_mode,
         sound_enabled,
     } = settings;
     let mut machine_menu = Menu::new("Machine").map_err(|e| e.to_string())?;
     machine_menu.add_item("Reset", RESET_ID).build();
     machine_menu.add_separator();
-    let free_run_item = machine_menu.add_item("Free Run", FREE_RUN_ID).build();
-    set_menu_checked(free_run_item, free_run);
+    let fast_mode_item = machine_menu.add_item("Fast Mode", FAST_MODE_ID).build();
+    set_menu_checked(fast_mode_item, fast_mode);
     machine_menu.add_separator();
     let sound_item = machine_menu.add_item("Sound", SOUND_ID).build();
     set_menu_checked(sound_item, sound_enabled);
@@ -417,7 +417,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
     let window_handle = window.add_menu(&window_menu);
     Ok(WindowMenus {
         handles: [machine_handle, view_handle, window_handle],
-        free_run_item,
+        fast_mode_item,
         sound_item,
         joystick_help_item,
     })
@@ -806,6 +806,24 @@ fn draw_video(buffer: &mut [u32], width: usize, pixels: &[u8], video_width: usiz
     }
 }
 
+/// Locate the REALTIME label and value at the status font's native size.
+/// Arguments: mips and realtime are the displayed meter values. Returns: the horizontal pixel range.
+fn realtime_text_range(mips: f64, realtime: f64) -> std::ops::Range<usize> {
+    let start = 10 + 6 * 6 + format!("{mips:.3}").len() * 6 + 18;
+    let end = start + ("REALTIME: ".len() + format!("{realtime:.2}X").len()) * 6;
+    start..end
+}
+
+/// Test a window-relative mouse position against the unscaled REALTIME text.
+/// Arguments: position is the mouse location; video_height is the status top; meters set text width. Returns: true inside the text.
+fn realtime_text_hit(position: (f32, f32), video_height: usize, mips: f64, realtime: f64) -> bool {
+    let range = realtime_text_range(mips, realtime);
+    position.0 >= range.start as f32
+        && position.0 < range.end as f32
+        && position.1 >= (video_height + 1) as f32
+        && position.1 < (video_height + STATUS_HEIGHT - 1) as f32
+}
+
 /// A one-pixel gray outline separates the black status strip from the video.
 /// Arguments: buffer is the output; width is row stride; video_height locates the strip; mips/realtime are meters; sound_enabled sets icon. Returns: nothing.
 fn draw_status(
@@ -831,7 +849,7 @@ fn draw_status(
     let mips_value = format!("{mips:.3}");
     let mips_x = label_x + 6 * 6;
     draw_status_text(buffer, width, mips_x, y, &mips_value, 0xffffff);
-    let realtime_x = mips_x + mips_value.len() * 6 + 18;
+    let realtime_x = realtime_text_range(mips, realtime).start;
     draw_status_text(buffer, width, realtime_x, y, "REALTIME: ", 0x888888);
     draw_status_text(
         buffer,
@@ -1056,7 +1074,7 @@ fn run() -> Result<(), String> {
                     .map_err(|_| "invalid RAM size".to_string())?
             }
             "--help" | "-h" => {
-                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE | --run-prg FILE] [--preload-prg FILE | --run-preload-prg FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--prg loads after BASIC startup; --preload-prg loads before it. The --run variants start execution at the PRG's load address after startup. --go overrides the execution address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Free Run. The View menu controls the status bar, border size, zoom, and joystick key help. Escape closes the window; Break/Pause (F15 on macOS) toggles joystick help; F12 resets the machine.");
+                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE | --run-prg FILE] [--preload-prg FILE | --run-preload-prg FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--prg loads after BASIC startup; --preload-prg loads before it. The --run variants start execution at the PRG's load address after startup. --go overrides the execution address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Fast Mode. Click REALTIME in the status bar to toggle Fast Mode. The View menu controls the status bar, border size, zoom, and joystick key help. Escape closes the window; Break/Pause (F15 on macOS) toggles joystick help; F12 resets the machine.");
                 return Ok(());
             }
             _ => return Err(format!("unknown option {arg}")),
@@ -1141,12 +1159,14 @@ fn run() -> Result<(), String> {
     let mut paced_ticks = machine.ted.ticks;
     let mut mips = 0.0;
     let mut realtime = 0.0;
+    let mut left_was_down = false;
     let audio_debug = env::var_os("XC16EMU_AUDIO_DEBUG").is_some();
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // A setting that changes the video crop or status area changes the
         // fixed-size minifb buffer, so it requires a new window.
         let mut recreate_window = false;
         let mut persist_settings = false;
+        let mut toggle_fast_mode = false;
         if let Some(id) = window.is_menu_pressed() {
             match id {
                 RESET_ID => {
@@ -1160,16 +1180,7 @@ fn run() -> Result<(), String> {
                     meter_time = Instant::now();
                     next_frame = meter_time;
                 }
-                FREE_RUN_ID => {
-                    settings.free_run = !settings.free_run;
-                    set_menu_checked(menus.free_run_item, settings.free_run);
-                    persist_settings = true;
-                    next_frame = Instant::now();
-                    meter_ticks = machine.ted.ticks;
-                    paced_ticks = machine.ted.ticks;
-                    meter_instructions = machine.instructions_executed;
-                    meter_time = next_frame;
-                }
+                FAST_MODE_ID => toggle_fast_mode = true,
                 SOUND_ID => {
                     if settings.sound_enabled {
                         machine.set_audio_sample_rate(0);
@@ -1219,6 +1230,34 @@ fn run() -> Result<(), String> {
                 }
                 _ => {}
             }
+        }
+        let left_down = window.get_mouse_down(MouseButton::Left);
+        if left_down && !left_was_down && settings.show_status {
+            let (_, video_height) = settings.border.dimensions();
+            if window
+                .get_mouse_pos(MouseMode::Discard)
+                .is_some_and(|position| {
+                    realtime_text_hit(
+                        position,
+                        video_height * settings.zoom as usize,
+                        mips,
+                        realtime,
+                    )
+                })
+            {
+                toggle_fast_mode = true;
+            }
+        }
+        left_was_down = left_down;
+        if toggle_fast_mode {
+            settings.fast_mode = !settings.fast_mode;
+            set_menu_checked(menus.fast_mode_item, settings.fast_mode);
+            persist_settings = true;
+            next_frame = Instant::now();
+            meter_ticks = machine.ted.ticks;
+            paced_ticks = machine.ted.ticks;
+            meter_instructions = machine.instructions_executed;
+            meter_time = next_frame;
         }
         if persist_settings {
             save_settings(&config_path, settings);
@@ -1314,7 +1353,7 @@ fn run() -> Result<(), String> {
         window
             .update_with_buffer(&rgb, width, height)
             .map_err(|e| e.to_string())?;
-        if settings.free_run {
+        if settings.fast_mode {
             next_frame = Instant::now();
             paced_ticks = machine.ted.ticks;
         } else {
@@ -1354,19 +1393,20 @@ mod tests {
             border: BorderSize::Compact,
             show_status: false,
             show_joystick_help: true,
-            free_run: true,
+            fast_mode: true,
             sound_enabled: false,
         };
         assert_eq!(DesktopSettings::parse_toml(&settings.to_toml()), settings);
         let invalid = DesktopSettings::parse_toml(
-            "zoom = 3\nborder = \"unknown\"\nstatus_bar = maybe\nfree_run = false\n",
+            "zoom = 3\nborder = \"unknown\"\nstatus_bar = maybe\nfast_mode = false\n",
         );
         assert_eq!(invalid.zoom, 2);
         assert_eq!(invalid.border, BorderSize::Big);
         assert!(invalid.show_status);
         assert!(!invalid.show_joystick_help);
-        assert!(!invalid.free_run);
+        assert!(!invalid.fast_mode);
         assert!(invalid.sound_enabled);
+        assert!(DesktopSettings::parse_toml("free_run = true").fast_mode);
     }
 
     #[test]
@@ -1396,6 +1436,38 @@ mod tests {
         let mut muted = vec![0; width * (video_height + STATUS_HEIGHT)];
         draw_status(&mut muted, width, video_height, 1.007, 1.0, false);
         assert_eq!(muted[(video_height + 2) * width + width - 20 + 2], 0x888888);
+    }
+
+    #[test]
+    /// Check the REALTIME click target follows its displayed position and excludes video.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
+    fn realtime_click_target_matches_status_text() {
+        let video_height = 200 * 4;
+        let range = realtime_text_range(1.007, 1.0);
+        assert!(realtime_text_hit(
+            (range.start as f32, (video_height + 2) as f32),
+            video_height,
+            1.007,
+            1.0,
+        ));
+        assert!(realtime_text_hit(
+            ((range.end - 1) as f32, (video_height + 8) as f32),
+            video_height,
+            1.007,
+            1.0,
+        ));
+        assert!(!realtime_text_hit(
+            (range.start as f32, (video_height - 1) as f32),
+            video_height,
+            1.007,
+            1.0,
+        ));
+        assert!(!realtime_text_hit(
+            (range.end as f32, (video_height + 2) as f32),
+            video_height,
+            1.007,
+            1.0,
+        ));
     }
 
     #[test]

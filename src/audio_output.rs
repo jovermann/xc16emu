@@ -11,7 +11,7 @@ use std::sync::{
 };
 
 /// A few PAL frames of latency keep GUI scheduling jitter out of the sound.
-/// In Free Run the producer can outpace the device, so old samples are dropped.
+/// In Fast Mode the producer can outpace the device, so old samples are dropped.
 const MAX_BUFFER_DIVISOR: usize = 8; // 125 ms at any output sample rate.
 
 pub(crate) struct AudioOutput {

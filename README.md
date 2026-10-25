@@ -15,7 +15,7 @@ Features
 - Virtual IEC device 8 for BASIC `DLOAD` and `DSAVE` using a host directory.
 - Loading and starting PRG files before or after BASIC boot, and restoring 64 kB frozen images.
 - Headless 40×25 text and 320×200 graphics capture for automated testing.
-- macOS window with adjustable zoom and borders, status display, reset, Free Run, and joystick key help.
+- macOS window with adjustable zoom and borders, status display, reset, Fast Mode, and joystick key help.
 - Persistent desktop settings in `~/.xc16emu.toml`.
 
 
@@ -108,7 +108,7 @@ The preassembled PRG can be started with:
 ```
 
 At the normal PAL rate, the full image takes about 2½ minutes. Select
-**Machine → Free Run** to draw it faster. To rebuild the PRG from source:
+**Machine → Fast Mode** or click **REALTIME** in the status line to draw it faster. To rebuild the PRG from source:
 
 ```sh
 ass6510 -m -o examples/mandelbrot.prg examples/mandelbrot.asm
