@@ -967,8 +967,8 @@ fn run() -> Result<(), String> {
     let mut headless = false;
     let mut text = false;
     let mut graphics = false;
+    let mut preload_prg = None;
     let mut prg = None;
-    let mut module = None;
     let mut go_address = None;
     let mut frozen_image = None;
     let mut typed = Vec::new();
@@ -1017,8 +1017,30 @@ fn run() -> Result<(), String> {
                 graphics = true;
                 headless = true;
             }
-            "--prg" => prg = Some(PathBuf::from(args.next().ok_or("--prg needs a path")?)),
-            "--module" => module = Some(PathBuf::from(args.next().ok_or("--module needs a path")?)),
+            "--preload-prg" => {
+                preload_prg = Some((
+                    PathBuf::from(args.next().ok_or("--preload-prg needs a path")?),
+                    false,
+                ));
+            }
+            "--run-preload-prg" => {
+                preload_prg = Some((
+                    PathBuf::from(args.next().ok_or("--run-preload-prg needs a path")?),
+                    true,
+                ));
+            }
+            "--prg" => {
+                prg = Some((
+                    PathBuf::from(args.next().ok_or("--prg needs a path")?),
+                    false,
+                ));
+            }
+            "--run-prg" => {
+                prg = Some((
+                    PathBuf::from(args.next().ok_or("--run-prg needs a path")?),
+                    true,
+                ));
+            }
             "--go" => go_address = Some(parse_go_address(args.next())?),
             "--frozen-image" => {
                 frozen_image = Some(PathBuf::from(
@@ -1034,7 +1056,7 @@ fn run() -> Result<(), String> {
                     .map_err(|_| "invalid RAM size".to_string())?
             }
             "--help" | "-h" => {
-                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE] [--module FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--module loads a two-byte-address image after ROM startup; --go starts execution at a hexadecimal address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Free Run. The View menu controls the status bar, border size, zoom, and joystick key help. Escape closes the window; Break/Pause (F15 on macOS) toggles joystick help; F12 resets the machine.");
+                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE | --run-prg FILE] [--preload-prg FILE | --run-preload-prg FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--prg loads after BASIC startup; --preload-prg loads before it. The --run variants start execution at the PRG's load address after startup. --go overrides the execution address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Free Run. The View menu controls the status bar, border size, zoom, and joystick key help. Escape closes the window; Break/Pause (F15 on macOS) toggles joystick help; F12 resets the machine.");
                 return Ok(());
             }
             _ => return Err(format!("unknown option {arg}")),
@@ -1049,20 +1071,27 @@ fn run() -> Result<(), String> {
         let data = fs::read(path).map_err(|e| e.to_string())?;
         machine.load_frozen_image(&data).map_err(str::to_string)?;
     }
-    if let Some(path) = prg {
+    let mut run_address = None;
+    if let Some((path, run_loaded_prg)) = preload_prg {
         let data = fs::read(path).map_err(|e| e.to_string())?;
-        machine.load_prg(&data).map_err(str::to_string)?;
+        let address = machine.load_prg(&data).map_err(str::to_string)?;
+        if run_loaded_prg {
+            run_address = Some(address);
+        }
     }
     machine.run_frames(100)?;
     for line in typed {
         machine.type_text(&line)?;
         machine.type_text("\n")?;
     }
-    if let Some(path) = module {
+    if let Some((path, run_loaded_prg)) = prg {
         let data = fs::read(path).map_err(|e| e.to_string())?;
-        machine.load_prg(&data).map_err(str::to_string)?;
+        let address = machine.load_prg(&data).map_err(str::to_string)?;
+        if run_loaded_prg {
+            run_address = Some(address);
+        }
     }
-    if let Some(address) = go_address {
+    if let Some(address) = go_address.or(run_address) {
         machine.cpu.pc = address;
     }
     if headless {

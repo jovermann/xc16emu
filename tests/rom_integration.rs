@@ -31,6 +31,98 @@ fn basic_rom_reaches_ready_screen() {
 }
 
 #[test]
+/// Check the assembled cube demo draws and rotates across PAL frames.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
+fn rotating_cube_demo_changes_its_wireframe() {
+    let mut machine = booted();
+    machine
+        .load_prg(include_bytes!("../examples/rotating_cube.prg"))
+        .unwrap();
+    machine.cpu.pc = 0x6000;
+    machine.run_frames(20).unwrap();
+    assert_eq!(machine.read(0x7001), 0x40, "row offset was not generated");
+    assert_eq!(machine.read(0x7104), 0x05, "row carry was lost");
+    assert_eq!(machine.read(0x7200), 0x80, "pixel masks were not generated");
+    assert_eq!(machine.read(0x7207), 0x01, "last pixel mask is wrong");
+    let first_vertices: Vec<_> = (0x7300..0x7308).map(|addr| machine.read(addr)).collect();
+    let rear_width = first_vertices[1].abs_diff(first_vertices[0]);
+    let near_width = first_vertices[5].abs_diff(first_vertices[4]);
+    assert!(
+        near_width > rear_width,
+        "perspective did not enlarge the near face: {near_width} <= {rear_width}"
+    );
+    let first = machine.capture_graphics_screen();
+    assert!(first.contains('1'), "cube did not appear");
+    machine.run_frames(15).unwrap();
+    let second = machine.capture_graphics_screen();
+    assert!(second.contains('1'), "cube vanished");
+    assert_ne!(first, second, "cube did not rotate");
+    let second_vertices: Vec<_> = (0x7300..0x7308).map(|addr| machine.read(addr)).collect();
+    assert_ne!(
+        first_vertices, second_vertices,
+        "cube corners did not rotate"
+    );
+    for addr in 0x7400..0x7408 {
+        assert!(machine.read(addr) < 200, "cube corner left the display");
+    }
+    for _ in 0..360 {
+        machine.run_frames(1).unwrap();
+        for addr in 0x7300..0x7308 {
+            let x = machine.read(addr);
+            assert!((40..=250).contains(&x), "cube corner X wrapped: {x}");
+        }
+        for addr in 0x7400..0x7408 {
+            let y = machine.read(addr);
+            assert!(y < 200, "cube corner Y wrapped: {y}");
+        }
+    }
+}
+
+#[test]
+/// Check the Mandelbrot demo renders distinct columns at a 1:1 aspect ratio.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
+fn mandelbrot_demo_draws_black_inside_and_white_outside() {
+    let mut machine = booted();
+    let boot_border = machine.read(0xff19);
+    assert_eq!(boot_border & 0x0f, 14, "BASIC boot border is not blue");
+    machine
+        .load_prg(include_bytes!("../examples/mandelbrot.prg"))
+        .unwrap();
+    machine.cpu.pc = 0x4000;
+    machine.run_frames(8_200).unwrap();
+    assert_eq!(machine.read(0xff19), boot_border);
+    let pixels = machine.capture_graphics_screen();
+    let rows: Vec<_> = pixels.lines().collect();
+    assert_eq!(rows.len(), 200);
+    assert!(rows.iter().all(|row| row.len() == 320));
+    assert_eq!(rows[0].as_bytes()[0], b'1');
+    assert_eq!(rows[99].as_bytes()[160], b' ');
+    assert_eq!(rows[99].as_bytes()[319], b'1');
+    assert_eq!(rows[10].as_bytes()[238], b'1'); // escapes near iteration 15
+    assert_ne!(rows[75].as_bytes()[133], rows[75].as_bytes()[134]);
+    let black: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .flat_map(|(y, row)| {
+            row.bytes()
+                .enumerate()
+                .filter(|&(_, pixel)| pixel == b' ')
+                .map(move |(x, _)| (x, y))
+        })
+        .collect();
+    let width = black.iter().map(|&(x, _)| x).max().unwrap()
+        - black.iter().map(|&(x, _)| x).min().unwrap()
+        + 1;
+    let height = black.iter().map(|&(_, y)| y).max().unwrap()
+        - black.iter().map(|&(_, y)| y).min().unwrap()
+        + 1;
+    assert!(width * 4 <= height * 5 && height * 4 <= width * 5);
+    for y in 0..100 {
+        assert_eq!(rows[y], rows[199 - y], "asymmetric row {y}");
+    }
+}
+
+#[test]
 /// Check host keys affect isolated joystick reads on each port.
 /// Arguments: none. Returns: nothing; assertions fail on regression.
 fn keyboard_equivalents_drive_both_joystick_ports() {
@@ -56,13 +148,13 @@ fn keyboard_equivalents_drive_both_joystick_ports() {
 }
 
 #[test]
-/// Check Galaxy module load and entry point through the CLI.
+/// Check a PRG with a separate load address and entry point through the CLI.
 /// Arguments: none. Returns: nothing; assertions fail on regression.
-fn galaxy_module_loads_after_boot_and_starts_at_4000() {
+fn galaxy_prg_loads_after_boot_and_starts_at_4000() {
     let output = Command::new(env!("CARGO_BIN_EXE_xc16emu"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args([
-            "--module",
+            "--prg",
             "old/galaxy_0200-4007_module_start_with_g4000",
             "--go",
             "4000",
@@ -81,6 +173,39 @@ fn galaxy_module_loads_after_boot_and_starts_at_4000() {
     let screen = String::from_utf8(output.stdout).unwrap();
     assert!(screen.contains("1984"), "{screen}");
     assert!(!screen.contains("READY."), "{screen}");
+}
+
+#[test]
+/// Check both PRG load times and automatic execution at the file's load address.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
+fn prg_cli_load_and_run_options_draw_the_cube() {
+    for (option, needs_go) in [
+        ("--prg", true),
+        ("--preload-prg", true),
+        ("--run-prg", false),
+        ("--run-preload-prg", false),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_xc16emu"));
+        command.current_dir(env!("CARGO_MANIFEST_DIR")).args([
+            option,
+            "examples/rotating_cube.prg",
+            "--headless",
+            "--frames",
+            "20",
+            "--graphics",
+        ]);
+        if needs_go {
+            command.args(["--go", "6000"]);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{option}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let screen = String::from_utf8(output.stdout).unwrap();
+        assert!(screen.contains('1'), "{option} did not draw the cube");
+    }
 }
 
 #[test]

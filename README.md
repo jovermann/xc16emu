@@ -13,7 +13,7 @@ Features
 - TED sound with two voices, noise, volume control, and digital sample playback.
 - Keyboard input and keyboard-controlled substitutes for both joystick ports.
 - Virtual IEC device 8 for BASIC `DLOAD` and `DSAVE` using a host directory.
-- Loading of PRG files, modules with a chosen start address, and 64 kB frozen images.
+- Loading and starting PRG files before or after BASIC boot, and restoring 64 kB frozen images.
 - Headless 40×25 text and 320×200 graphics capture for automated testing.
 - macOS window with adjustable zoom and borders, status display, reset, Free Run, and joystick key help.
 - Persistent desktop settings in `~/.xc16emu.toml`.
@@ -42,14 +42,20 @@ The ROM images are not included in this repository. Put `basrom.dat` and
 Loading programs
 ----------------
 
-`--prg FILE` copies a two-byte-address Commodore PRG directly into RAM.
-`--module FILE` loads the same format **after** BASIC has booted, so startup
-does not overwrite a module in low RAM. `--go HEX` starts executing at a
-hexadecimal address (bare `4000`, `$4000`, or `0x4000`). For a compatible
-module whose entry point is `$4000`:
+All four options accept a Commodore PRG with a two-byte load address:
+
+- `--prg FILE` loads it after BASIC boots.
+- `--run-prg FILE` loads it after BASIC boots, then starts at its load address.
+- `--preload-prg FILE` loads it before BASIC boots.
+- `--run-preload-prg FILE` loads it before BASIC boots, then starts at its load address after boot.
+
+Use the after-boot options for most programs, since BASIC startup can overwrite
+preloaded RAM. `--go HEX` sets a different execution address after boot (bare
+`4000`, `$4000`, or `0x4000`); it overrides the address from a `--run` option.
+For a PRG loaded at `$0200` whose entry point is `$4000`:
 
 ```sh
-./target/release/xc16emu --roms /path/to/roms --module path/to/module.prg --go 4000
+./target/release/xc16emu --roms /path/to/roms --prg path/to/program.prg --go 4000
 ```
 
 For BASIC's `DLOAD` and `DSAVE`, `--drive DIR` exposes a host directory as
@@ -57,6 +63,56 @@ device 8. Filenames are confined to that directory. `--dry-run` acknowledges
 drive saves without writing a file. `--verbose` reports drive file opens.
 
 `--frozen-image FILE` accepts the old emulator's 64 KiB frozen-image format.
+
+Rotating cube demo
+------------------
+
+The preassembled [wireframe cube](examples/rotating_cube.asm) animates in
+320×200 bitmap mode. Start it with:
+
+```sh
+./target/release/xc16emu --roms /path/to/roms --run-prg examples/rotating_cube.prg
+```
+
+To rebuild its PRG from the assembler source, use `ass6510`:
+
+```sh
+ass6510 -m -o examples/rotating_cube.prg examples/rotating_cube.asm
+```
+
+The program calculates its cube corners from three rotating three-dimensional
+fixed-point axes and applies perspective, so the near face appears larger than
+the far face. It repeats the rotation after a complete turn to keep rounding
+errors from growing the cube. It also generates bitmap row offsets and pixel
+masks in RAM at startup, so the source contains no stored animation frames or
+lookup tables.
+It draws into alternating bitmap buffers and switches them in the lower screen
+border to keep the animation steady.
+
+Mandelbrot demo
+---------------
+
+The [Mandelbrot assembler program](examples/mandelbrot.asm) calculates each
+point on the emulated CPU with a 20-iteration limit. White pixels have escaped;
+black pixels remain bounded. The image appears progressively in bitmap mode.
+The blue border from the boot screen stays visible.
+It calculates all 320 columns on each of 100 rows, then mirrors those rows
+vertically to fill the 320×200 display. Equal coordinate spacing on both axes
+keeps the set's proportions at 1:1. The program generates its square, bitmap
+row, and pixel-mask lookup tables in RAM at startup; the source contains no
+precomputed image or large data tables.
+The preassembled PRG can be started with:
+
+```sh
+./target/release/xc16emu --roms /path/to/roms --run-prg examples/mandelbrot.prg
+```
+
+At the normal PAL rate, the full image takes about 2½ minutes. Select
+**Machine → Free Run** to draw it faster. To rebuild the PRG from source:
+
+```sh
+ass6510 -m -o examples/mandelbrot.prg examples/mandelbrot.asm
+```
 
 Running tests
 -------------
