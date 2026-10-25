@@ -209,6 +209,51 @@ fn prg_cli_load_and_run_options_draw_the_cube() {
 }
 
 #[test]
+/// Check CLI help lists every option in aligned groups and ends with version and copyright.
+/// Arguments: none. Returns: nothing; assertions fail on regression.
+fn help_and_version_follow_the_command_line_layout() {
+    let binary = env!("CARGO_BIN_EXE_xc16emu");
+    let help_output = Command::new(binary).arg("--help").output().unwrap();
+    assert!(help_output.status.success());
+    let help = String::from_utf8(help_output.stdout).unwrap();
+    assert!(help.starts_with("xc16emu: C16/C116/Plus/4 emulator for macOS.\n\nUsage:"));
+    for option in [
+        "  --roms DIR ",
+        "  --ram 16|32|64 ",
+        "  --prg FILE ",
+        "  --run-prg FILE ",
+        "  --preload-prg FILE ",
+        "  --run-preload-prg FILE ",
+        "  --go HEX ",
+        "  --frozen-image FILE ",
+        "  --drive DIR ",
+        "  --dry-run ",
+        "  -v --verbose ",
+        "  --type TEXT ",
+        "  --headless ",
+        "  --frames N ",
+        "  --text ",
+        "  --graphics ",
+        "  --zoom 1|2|4 ",
+        "  --speed FACTOR ",
+        "  --small-border ",
+        "  -h --help ",
+        "     --version ",
+    ] {
+        assert!(
+            help.lines().any(|line| line.starts_with(option)),
+            "missing {option}"
+        );
+    }
+    let version_output = Command::new(binary).arg("--version").output().unwrap();
+    assert!(version_output.status.success());
+    let version = String::from_utf8(version_output.stdout).unwrap();
+    assert_eq!(help.lines().last(), Some(version.trim_end()));
+    assert!(version.contains(env!("CARGO_PKG_VERSION")));
+    assert!(version.contains("Copyright (c) 2026 Johannes Overmann"));
+}
+
+#[test]
 /// Check TOM keeps its raster split and character set stable.
 /// Arguments: none. Returns: nothing; assertions fail on regression.
 fn tom_raster_irq_keeps_the_character_set_stable_each_frame() {

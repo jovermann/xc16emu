@@ -976,6 +976,60 @@ fn matrix_key(key: Key) -> Option<u8> {
     })
 }
 
+/// Print the package version, copyright and project URL.
+/// Arguments: none. Returns: nothing; writes one line to standard output.
+fn print_version() {
+    println!(
+        "xc16emu version {} *** Copyright (c) 2026 Johannes Overmann *** https://github.com/jovermann/xc16emu",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// Print the grouped command-line reference followed by version and copyright.
+/// Arguments: none. Returns: nothing; writes help to standard output.
+fn print_help() {
+    print!(
+        "{}",
+        r#"xc16emu: C16/C116/Plus/4 emulator for macOS.
+
+Usage: xc16emu [OPTIONS]
+
+ROM and program options:
+  --roms DIR              Read basrom.dat and sysrom.dat from DIR (default: old/roms).
+  --ram 16|32|64           Set RAM size in KiB (default: 64).
+  --prg FILE               Load a PRG after BASIC boots.
+  --run-prg FILE           Load after boot and run at the PRG load address.
+  --preload-prg FILE       Load a PRG before BASIC boots.
+  --run-preload-prg FILE   Load before boot; run at its load address after boot.
+  --go HEX                 Start at HEX after boot; overrides a --run address.
+  --frozen-image FILE      Restore a 64 KiB frozen machine image.
+
+Drive options:
+  --drive DIR              Expose DIR as virtual device 8 (default: current directory).
+  --dry-run                Accept drive saves without writing files.
+  -v --verbose             Report drive file opens.
+
+Execution and capture options:
+  --type TEXT              Type a BASIC line after boot; may be repeated.
+  --headless               Run without opening a window.
+  --frames N               Run N frames in headless mode (default: 250).
+  --text                   Print the 40x25 text screen; implies --headless.
+  --graphics               Print the 320x200 graphics screen; implies --headless.
+
+Desktop options:
+  --zoom 1|2|4             Set the initial video zoom.
+  --speed FACTOR           Set the paced emulation speed (default: 1).
+  --small-border           Use the compact border.
+
+Common options:
+  -h --help                Print this help message and exit.
+     --version             Print version and exit.
+
+"#
+    );
+    print_version();
+}
+
 /// Parse options, boot the ROM, and run in capture or desktop mode.
 /// Arguments: CLI arguments and environment are read internally. Returns: success or a diagnostic error.
 fn run() -> Result<(), String> {
@@ -1074,7 +1128,11 @@ fn run() -> Result<(), String> {
                     .map_err(|_| "invalid RAM size".to_string())?
             }
             "--help" | "-h" => {
-                println!("Usage: xc16emu [--roms DIR] [--drive DIR] [--dry-run] [--ram 16|32|64] [--prg FILE | --run-prg FILE] [--preload-prg FILE | --run-preload-prg FILE] [--go HEX] [--frozen-image FILE] [--type 'BASIC line'] [--headless --frames N] [--text] [--graphics] [--zoom 1|2|4] [--speed FACTOR] [--small-border]\n\n--prg loads after BASIC startup; --preload-prg loads before it. The --run variants start execution at the PRG's load address after startup. --go overrides the execution address (for example, --go 4000). Desktop settings are saved in ~/.xc16emu.toml. The Machine menu has Reset and Fast Mode. Click REALTIME in the status bar to toggle Fast Mode. The View menu controls the status bar, border size, zoom, and joystick key help. Escape closes the window; Break/Pause (F15 on macOS) toggles joystick help; F12 resets the machine.");
+                print_help();
+                return Ok(());
+            }
+            "--version" => {
+                print_version();
                 return Ok(());
             }
             _ => return Err(format!("unknown option {arg}")),
