@@ -81,7 +81,7 @@ start   SEI                     ; the demo owns these RAM and TED registers
 
         ; Bitmap set bits use bright white ($71); clear bits use black.
         LDX #$00
-initcol LDA #$07
+.initcol LDA #$07
         STA $0800,X
         STA $0900,X
         STA $0a00,X
@@ -92,7 +92,7 @@ initcol LDA #$07
         STA $0e00,X
         STA $0f00,X
         INX
-        BNE initcol
+        BNE .initcol
 
         LDA #$20
         STA drawhi
@@ -115,12 +115,12 @@ main    JSR clearbuf            ; erase only the hidden bitmap
         INC frameidx
         LDA frameidx
         CMP #18                 ; approximately one complete 3D turn
-        BNE advance
+        BNE .advance
         JSR initaxes            ; remove accumulated rounding drift
         LDA #$00
         STA frameidx
         JMP main
-advance JSR rotate              ; advance yaw and pitch for next frame
+.advance JSR rotate              ; advance yaw and pitch for next frame
         JMP main
 
 ; Generate row*320 offsets and descending bit masks in RAM. There are no
@@ -129,7 +129,7 @@ maketab LDA #$00
         STA rowlow
         STA rowhigh
         LDX #$00
-makrow  LDA rowlow
+.makrow  LDA rowlow
         STA rowlo,X
         CLC
         ADC #$40
@@ -140,14 +140,14 @@ makrow  LDA rowlow
         STA rowhigh
         INX
         CPX #25
-        BNE makrow
+        BNE .makrow
         LDA #$80
         LDX #$00
-makmask STA pixels,X
+.makmask STA pixels,X
         LSR
         INX
         CPX #8
-        BNE makmask
+        BNE .makmask
         RTS
 
 ; Start with unit-length cube axes X=(32,0,0), Y=(0,32,0), Z=(0,0,32),
@@ -183,30 +183,30 @@ initaxes
 ; Project each corner of a cube. Bits 0,1,2 of signs choose the positive
 ; X,Y,Z axes; the remaining corners use their negative counterparts.
 corners LDX #$00
-corner  STX vertex
+.corner  STX vertex
         TXA
         AND #$03
         CMP #$01
-        BEQ xpos
+        BEQ .xpos
         CMP #$02
-        BNE xneg
-xpos    LDA #$01
-        BNE xready
-xneg    LDA #$00
-xready  STA signs
+        BNE .xneg
+.xpos    LDA #$01
+        BNE .xready
+.xneg    LDA #$00
+.xready  STA signs
         TXA
         AND #$02
-        BEQ yneg
+        BEQ .yneg
         LDA signs
         ORA #$02
         STA signs
-yneg    TXA
+.yneg    TXA
         AND #$04
-        BEQ zneg
+        BEQ .zneg
         LDA signs
         ORA #$04
         STA signs
-zneg    LDX #$0c
+.zneg    LDX #$0c
         JSR project
         STA worldz
         LDA #128
@@ -231,7 +231,7 @@ zneg    LDX #$0c
         STA vertexy,X
         INX
         CPX #8
-        BNE corner
+        BNE .corner
         RTS
 
 ; Sum the three signed basis components selected by signs. X selects the
@@ -243,10 +243,10 @@ project LDA #$00
         STA signbit
         LDA #$03
         STA axes
-projaxis
+.projaxis
         LDA signs
         AND signbit
-        BEQ subaxis
+        BEQ .subaxis
         CLC
         LDA sumlo
         ADC basis,X
@@ -254,20 +254,20 @@ projaxis
         LDA sumhi
         ADC basis+1,X
         STA sumhi
-        JMP nextaxis
-subaxis SEC
+        JMP .nextaxis
+.subaxis SEC
         LDA sumlo
         SBC basis,X
         STA sumlo
         LDA sumhi
         SBC basis+1,X
         STA sumhi
-nextaxis
+.nextaxis
         INX
         INX
         ASL signbit
         DEC axes
-        BNE projaxis
+        BNE .projaxis
         LDA sumhi
         CMP #$80
         ROR sumhi
@@ -293,29 +293,29 @@ nextaxis
 perspective
         LDX #$00
         CMP #$80
-        BCC positive
+        BCC .positive
         LDX #$01
         EOR #$ff
         CLC
         ADC #$01
-positive
+.positive
         STX negative
         PHA
         LSR
         STA numhi               ; magnitude * 128, high byte
         PLA
         AND #$01
-        BEQ evenmag
+        BEQ .evenmag
         LDA #$80
-evenmag STA numlo               ; magnitude * 128, low byte
+.evenmag STA numlo               ; magnitude * 128, low byte
         LDA #$00
         STA quot
-divloop LDA numhi
-        BNE divsub
+.divloop LDA numhi
+        BNE .divsub
         LDA numlo
         CMP denom
-        BCC divdone
-divsub  LDA numlo
+        BCC .divdone
+.divsub  LDA numlo
         SEC
         SBC denom
         STA numlo
@@ -323,15 +323,15 @@ divsub  LDA numlo
         SBC #$00
         STA numhi
         INC quot
-        JMP divloop
-divdone
+        JMP .divloop
+.divdone
         LDA negative
-        BEQ addcenter
+        BEQ .addcenter
         LDA center
         SEC
         SBC quot
         RTS
-addcenter
+.addcenter
         LDA center
         CLC
         ADC quot
@@ -341,27 +341,27 @@ addcenter
 ; approximated sine is 1/4 and cosine is 31/32 in signed Q4 arithmetic.
 rotate  LDX #$00
         LDY #$04
-        JSR rotpair
+        JSR .rotpair
         LDX #$06
         LDY #$0a
-        JSR rotpair
+        JSR .rotpair
         LDX #$0c
         LDY #$10
-        JSR rotpair
+        JSR .rotpair
         LDX #$02
         LDY #$04
-        JSR rotpair
+        JSR .rotpair
         LDX #$08
         LDY #$0a
-        JSR rotpair
+        JSR .rotpair
         LDX #$0e
         LDY #$10
-        JSR rotpair
+        JSR .rotpair
         RTS
 
 ; Rotate the signed 16-bit basis components indexed by X and Y. Original
 ; components remain in scratch until both updated values are calculated.
-rotpair LDA basis,X
+.rotpair LDA basis,X
         STA alo
         LDA basis+1,X
         STA ahi
@@ -430,12 +430,12 @@ rotpair LDA basis,X
 ; Arithmetically shift signed 16-bit shhi:shlo right by A bits. X and Y
 ; are kept for the caller's basis indexes.
 asr     STA shcount
-asrloop LDA shhi
+.asrloop LDA shhi
         CMP #$80
         ROR shhi
         ROR shlo
         DEC shcount
-        BNE asrloop
+        BNE .asrloop
         RTS
 
 waitbot LDA $ff1c               ; raster bit 8 becomes 1 at line 256
@@ -457,30 +457,30 @@ clearbuf
         LDX #31
         LDY #$00
         LDA #$00
-clearpg STA (ptr),Y
+.clearpg STA (ptr),Y
         INY
-        BNE clearpg
+        BNE .clearpg
         INC ptr+1
         DEX
-        BNE clearpg
-cleartl STA (ptr),Y
+        BNE .clearpg
+.cleartl STA (ptr),Y
         INY
         CPY #64
-        BNE cleartl
+        BNE .cleartl
         RTS
 
 ; Derive all twelve edge pairs from their edge number: four on each face,
 ; then four joining matching corners. The corners are computed each frame.
 edges   LDX #$00
-edgeloop
+.edgeloop
         STX edgeidx
         TXA
         CMP #8
-        BCC gota
+        BCC .gota
         SEC
         SBC #8
-        JMP gota
-gota
+        JMP .gota
+.gota
         TAY
         LDA vertexx,Y
         STA x0
@@ -488,19 +488,19 @@ gota
         STA y0
         LDA edgeidx
         CMP #8
-        BCC faceb
+        BCC .faceb
         SEC
         SBC #4
-        JMP gotb
-faceb   CLC
+        JMP .gotb
+.faceb   CLC
         ADC #1
         AND #3
         LDX edgeidx
         CPX #4
-        BCC gotb
+        BCC .gotb
         CLC
         ADC #4
-gotb
+.gotb
         TAY
         LDA vertexx,Y
         STA x1
@@ -510,7 +510,7 @@ gotb
         LDX edgeidx
         INX
         CPX #12
-        BNE edgeloop
+        BNE .edgeloop
         RTS
 
 ; Draw a line using an unsigned error accumulator. Each iteration advances
@@ -518,45 +518,45 @@ gotb
 line    LDA x1
         SEC
         SBC x0
-        BCS xplus
+        BCS .xplus
         EOR #$ff
         CLC
         ADC #$01
         STA dx
         LDA #$ff
         STA sx
-        JMP ydelta
-xplus   STA dx
+        JMP .ydelta
+.xplus   STA dx
         LDA #$01
         STA sx
-ydelta  LDA y1
+.ydelta  LDA y1
         SEC
         SBC y0
-        BCS yplus
+        BCS .yplus
         EOR #$ff
         CLC
         ADC #$01
         STA dy
         LDA #$ff
         STA sy
-        JMP choose
-yplus   STA dy
+        JMP .choose
+.yplus   STA dy
         LDA #$01
         STA sy
-choose  LDA dx
+.choose  LDA dx
         CMP dy
-        BCC steep
+        BCC .steep
         LSR
         STA err
 
-shallow JSR plot
+.shallow JSR plot
         LDA x0
         CMP x1
-        BEQ linedone
+        BEQ .linedone
         LDA err
         SEC
         SBC dy
-        BCS shok
+        BCS .shok
         CLC
         ADC dx
         STA err
@@ -564,25 +564,25 @@ shallow JSR plot
         CLC
         ADC sy
         STA y0
-        JMP shnext
-shok    STA err
-shnext  LDA x0
+        JMP .shnext
+.shok    STA err
+.shnext  LDA x0
         CLC
         ADC sx
         STA x0
-        JMP shallow
+        JMP .shallow
 
-steep   LDA dy
+.steep   LDA dy
         LSR
         STA err
-stloop  JSR plot
+.stloop  JSR plot
         LDA y0
         CMP y1
-        BEQ linedone
+        BEQ .linedone
         LDA err
         SEC
         SBC dx
-        BCS stok
+        BCS .stok
         CLC
         ADC dy
         STA err
@@ -590,14 +590,14 @@ stloop  JSR plot
         CLC
         ADC sx
         STA x0
-        JMP stnext
-stok    STA err
-stnext  LDA y0
+        JMP .stnext
+.stok    STA err
+.stnext  LDA y0
         CLC
         ADC sy
         STA y0
-        JMP stloop
-linedone
+        JMP .stloop
+.linedone
         RTS
 
 ; TED bitmap order is 40 character cells per eight-line row. Each cell's
@@ -619,9 +619,9 @@ plot    LDA y0
         CLC
         ADC ptr
         STA ptr
-        BCC ptrready
+        BCC .ptrready
         INC ptr+1
-ptrready
+.ptrready
         LDA x0
         AND #$07
         TAX

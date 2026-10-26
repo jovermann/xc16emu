@@ -55,6 +55,56 @@ fn zero_glyph_is_open_and_distinct_from_o() {
 }
 
 #[test]
+/// Keep graphics, lowercase, and second-set capitals present in the full font.
+/// Arguments: none. Returns: nothing; assertions report a regression.
+fn font_covers_both_reference_character_sets() {
+    let mut machine = booted();
+    assert_eq!(machine.read(0xff07), 0x88);
+    for code in 0_u16..256 {
+        if [0x20, 0x60, 0xa0].contains(&code) {
+            continue; // Spaces in the corresponding reference character sets.
+        }
+        assert!(
+            (0..8).any(|row| machine.read(0xd000 + code * 8 + row) != 0),
+            "glyph ${code:02X} is blank"
+        );
+    }
+    let first_capital: Vec<_> = (0..8).map(|row| machine.read(0xd000 + 8 + row)).collect();
+    let lower_a: Vec<_> = (0..8)
+        .map(|row| machine.read(0xd000 + 0x81 * 8 + row))
+        .collect();
+    assert_ne!(first_capital, lower_a);
+}
+
+#[test]
+/// The editor's extended punctuation uses visible second-set glyphs.
+/// Arguments: none. Returns: nothing; assertions report a regression.
+fn extended_ascii_uses_high_glyph_codes() {
+    let mut machine = booted();
+    let cell = u16::from_le_bytes([machine.ram[0x28], machine.ram[0x29]]) as usize;
+    machine.type_text("@[\\]^_`{|}~").unwrap();
+    assert_eq!(
+        &machine.ram[0x0c00 + cell..0x0c00 + cell + 11],
+        &[0xc0, 0xdb, 0xdc, 0xdd, 0x9e, 0x9f, 0xe0, 0xfb, 0xfc, 0xfd, 0xfe]
+    );
+}
+
+#[test]
+/// Text capture follows TED's lowercase-set versus reverse-video selection.
+/// Arguments: none. Returns: nothing; assertions report a regression.
+fn text_capture_decodes_second_set_lowercase() {
+    let mut machine = booted();
+    let row = machine.ram[0x2e] as usize;
+    let col = machine.ram[0x27] as usize;
+    machine.ram[0x0c00 + row * 40 + col] = 0x81;
+    let text = machine.capture_text_screen();
+    assert_eq!(text.lines().nth(row).unwrap().as_bytes()[col], b'a');
+    machine.write(0xff07, 0x08);
+    let text = machine.capture_text_screen();
+    assert_eq!(text.lines().nth(row).unwrap().as_bytes()[col], b'A');
+}
+
+#[test]
 /// Type the three documented first-stage examples via the keyboard matrix.
 /// Arguments: none. Returns: nothing; assertions report a regression.
 fn runs_first_three_basic_examples() {

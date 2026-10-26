@@ -93,57 +93,57 @@ finished
         RTS
 execute JSR checkbreak
         LDA failed
-        BEQ execute_ready
+        BEQ .execute_ready
         RTS
-execute_ready
+.execute_ready
         JSR spaces
         LDY pos
         LDA input,Y
         BEQ finished
         CMP #58                 ; ':' joins statements
-        BNE dispatch
+        BNE .dispatch
         INC pos
         JMP execute
-dispatch
+.dispatch
         CMP #80                 ; PRINT
-        BNE notprint
+        BNE .notprint
         JSR printstmt
         LDA failed
         BNE finished
         JMP execute
-notprint
+.notprint
         CMP #70                 ; FOR
-        BNE notfor
+        BNE .notfor
         JSR forstmt
         LDA failed
         BNE finished
         JMP execute
-notfor  CMP #78                 ; NEXT
-        BNE notnext
+.notfor  CMP #78                 ; NEXT
+        BNE .notnext
         JSR nextstmt
         LDA failed
         BNE finished
         LDA restart
         BNE finished
         JMP execute
-notnext CMP #82                 ; REM or RUN
-        BNE notrem
+.notnext CMP #82                 ; REM or RUN
+        BNE .notrem
         LDY pos
         INY
         LDA input,Y
         CMP #69                 ; E
-        BNE tryrun
+        BNE .tryrun
         INY
         LDA input,Y
         CMP #77                 ; M
-        BEQ rem_done
+        BEQ .rem_done
         JMP syntax
-rem_done
+.rem_done
         RTS
-tryrun  CMP #85                 ; U
-        BEQ run_u
+.tryrun  CMP #85                 ; U
+        BEQ .run_u
         JMP syntax
-run_u
+.run_u
         INY
         LDA input,Y
         CMP #78                 ; N
@@ -154,9 +154,9 @@ run_u
         STA pos
         JSR spaces
         CMP #48
-        BCC runfromstart
+        BCC .runfromstart
         CMP #58
-        BCS runfromstart
+        BCS .runfromstart
         JSR atom
         LDA vallo
         STA linelo
@@ -164,18 +164,18 @@ run_u
         STA linehi
         JSR findline
         LDA found
-        BNE runnow
+        BNE .runnow
         JMP syntax
-runfromstart
+.runfromstart
         LDA #0
         STA ptrlo
         LDA #$12
         STA ptrhi
-runnow
+.runnow
         JSR runprogram
         RTS
-notrem  CMP #76                 ; LIST
-        BNE notlist
+.notrem  CMP #76                 ; LIST
+        BNE .notlist
         LDY pos
         INY
         LDA input,Y
@@ -191,24 +191,24 @@ notrem  CMP #76                 ; LIST
         BNE syntax
         JSR listprogram
         RTS
-notlist CMP #71                 ; GOTO
-        BNE unknown
+.notlist CMP #71                 ; GOTO
+        BNE .unknown
         LDY pos
         INY
         LDA input,Y
         CMP #79                 ; O
-        BNE unknown
+        BNE .unknown
         INY
         LDA input,Y
         CMP #84                 ; T
-        BNE unknown
+        BNE .unknown
         INY
         LDA input,Y
         CMP #79                 ; O
-        BNE unknown
+        BNE .unknown
         JSR gotostmt
         RTS
-unknown JMP syntax
+.unknown JMP syntax
 syntax  LDA #$01
         STA failed
         LDA #errmsg%256
@@ -228,7 +228,7 @@ checkbreak
         STA $ff08
         LDA $ff08
         AND #$10                ; active-low RUN/STOP bit
-        BNE nobreak
+        BNE .nobreak
         LDA #1
         STA failed
         LDA #breakmsg%256
@@ -237,7 +237,7 @@ checkbreak
         STA msghi
         JSR printz
         JSR newline
-nobreak RTS
+.nobreak RTS
 
 ; Jump to an existing numbered line. A direct GOTO preserves variables;
 ; a GOTO inside RUN changes the next record without nesting another runner.
@@ -248,39 +248,39 @@ gotostmt
         STA pos
         JSR spaces
         CMP #48                 ; a target expression must start with a digit
-        BCC goto_syntax
+        BCC .goto_syntax
         CMP #58
-        BCS goto_syntax
+        BCS .goto_syntax
         JSR expr
         LDA failed
-        BNE goto_done
+        BNE .goto_done
         JSR spaces
         CMP #0
-        BEQ goto_target
+        BEQ .goto_target
         CMP #58                 ; allow a following statement separator
-        BNE goto_syntax
-goto_target
+        BNE .goto_syntax
+.goto_target
         LDA vallo
         STA linelo
         LDA valhi
         STA linehi
         JSR findline
         LDA found
-        BEQ goto_missing
+        BEQ .goto_missing
         LDA runmode
-        BEQ goto_direct
+        BEQ .goto_direct
         LDA ptrlo
         STA runlo
         LDA ptrhi
         STA runhi
         LDA #2                  ; tell RUN that its record was replaced
         STA restart
-goto_done
+.goto_done
         RTS
-goto_direct
+.goto_direct
         JSR runprogram_keepvars
         RTS
-goto_missing
+.goto_missing
         LDA #1
         STA failed
         LDA #undefmsg%256
@@ -290,17 +290,17 @@ goto_missing
         JSR printz
         JSR newline
         RTS
-goto_syntax
+.goto_syntax
         JMP syntax
 
 ; Consume ordinary spaces and leave the next nonspace byte in A.
 spaces  LDY pos
         LDA input,Y
         CMP #32
-        BNE spacedone
+        BNE .spacedone
         INC pos
         JMP spaces
-spacedone
+.spacedone
         RTS
 
 ; Parse PRINT items, semicolon continuation, and ten-column comma zones.
@@ -311,89 +311,89 @@ printstmt
         STA pos
         LDA #$00
         STA trail
-printitem
+.printitem
         JSR spaces
         CMP #$00
-        BEQ printend
+        BEQ .printend
         CMP #58
-        BEQ printend
+        BEQ .printend
         CMP #34                 ; quoted string
-        BNE maybehex
+        BNE .maybehex
         INC pos
-stringlp
+.stringlp
         LDY pos
         LDA input,Y
-        BEQ printend
+        BEQ .printend
         CMP #34
-        BEQ stringend
+        BEQ .stringend
         JSR putchar
         INC pos
-        JMP stringlp
-stringend
+        JMP .stringlp
+.stringend
         INC pos
-        JMP itemdone
-maybehex
+        JMP .itemdone
+.maybehex
         CMP #72                 ; HEX$(integer)
-        BNE numericitem
+        BNE .numericitem
         LDA pos
         CLC
         ADC #5
         STA pos
         JSR expr
         LDA failed
-        BNE printdone
+        BNE .printdone
         JSR spaces
         CMP #41
-        BEQ hexclose
+        BEQ .hexclose
         JMP syntax
-hexclose
+.hexclose
         INC pos
         LDA valhi
         JSR hexbyte
         LDA vallo
         JSR hexbyte
-        JMP itemdone
-numericitem
+        JMP .itemdone
+.numericitem
         JSR expr
         LDA failed
-        BNE printdone
+        BNE .printdone
         JSR decimal
-itemdone
+.itemdone
         LDA #$00
         STA trail
         JSR spaces
         CMP #59                 ; ';' suppresses newline
-        BNE checkcomma
+        BNE .checkcomma
         INC pos
         LDA #$01
         STA trail
-        JMP printitem
-checkcomma
+        JMP .printitem
+.checkcomma
         CMP #44                 ; ',' moves to next print zone
-        BNE printend
+        BNE .printend
         INC pos
         JSR comma
         LDA #$01
         STA trail
-        JMP printitem
-printend
+        JMP .printitem
+.printend
         LDA trail
-        BNE printdone
+        BNE .printdone
         JSR newline
-printdone
+.printdone
         RTS
 
 ; Advance to the next ten-column print zone, wrapping near the right edge.
 comma   LDA column
         CMP #30
-        BCC commacount
+        BCC .commacount
         JSR newline
         RTS
-commacount
+.commacount
         SEC
-commarem
+.commarem
         SBC #10
-        BCS commarem
+        BCS .commarem
         CLC
         ADC #10                 ; remainder in 0..9
         STA count
@@ -401,10 +401,10 @@ commarem
         SEC
         SBC count
         TAX
-commalp LDA #32
+.commalp LDA #32
         JSR putchar
         DEX
-        BNE commalp
+        BNE .commalp
         RTS
 
 ; Print four hex digits, high byte first. A is an unsigned byte.
@@ -413,16 +413,16 @@ hexbyte PHA
         LSR
         LSR
         LSR
-        JSR hexdigit
+        JSR .hexdigit
         PLA
         AND #$0f
-hexdigit
+.hexdigit
         CMP #10
-        BCC hexnumber
+        BCC .hexnumber
         CLC
         ADC #55                 ; 10 becomes 'A'
         JMP putchar
-hexnumber
+.hexnumber
         CLC
         ADC #48
         JMP putchar
@@ -437,16 +437,16 @@ printnum
         LDA #$00
         STA started
         LDX #$00
-decmore LDA #$00
+.decmore LDA #$00
         STA digit
-decsub  LDA valhi
+.decsub  LDA valhi
         CMP powershi,X
-        BCC decemit
-        BNE decsubtract
+        BCC .decemit
+        BNE .decsubtract
         LDA vallo
         CMP powerslo,X
-        BCC decemit
-decsubtract
+        BCC .decemit
+.decsubtract
         LDA vallo
         SEC
         SBC powerslo,X
@@ -455,22 +455,22 @@ decsubtract
         SBC powershi,X
         STA valhi
         INC digit
-        JMP decsub
-decemit LDA digit
-        BNE decchar
+        JMP .decsub
+.decemit LDA digit
+        BNE .decchar
         LDA started
-        BNE decchar
+        BNE .decchar
         CPX #4
-        BNE decnext
-decchar LDA #1
+        BNE .decnext
+.decchar LDA #1
         STA started
         LDA digit
         CLC
         ADC #48
         JSR putchar
-decnext INX
+.decnext INX
         CPX #5
-        BNE decmore
+        BNE .decmore
         RTS
 
 ; Parse one direct-mode FOR variable, starting integer, and upper bound.
@@ -486,13 +486,13 @@ forstmt LDA pos
         INC pos
         JSR spaces
         CMP #61                 ; '='
-        BEQ forequal
+        BEQ .forequal
         JMP syntax
-forequal
+.forequal
         INC pos
         JSR expr
         LDA failed
-        BNE fordone
+        BNE .fordone
         LDX forvar
         LDA vallo
         STA vars,X
@@ -500,14 +500,14 @@ forequal
         STA vars+1,X
         JSR spaces
         CMP #84                 ; TO
-        BEQ forto
+        BEQ .forto
         JMP syntax
-forto
+.forto
         INC pos
         INC pos
         JSR expr
         LDA failed
-        BNE fordone
+        BNE .fordone
         LDA vallo
         STA limitlo
         LDA valhi
@@ -515,12 +515,12 @@ forto
         LDA pos
         STA looppos
         LDA runmode
-        BEQ fordone
+        BEQ .fordone
         LDA runlo
         STA looplo
         LDA runhi
         STA loophi
-fordone
+.fordone
         RTS
 
 ; Increment the active FOR variable and repeat from its body until done.
@@ -531,39 +531,39 @@ nextstmt
         STA pos
         LDX forvar
         CPX #$ff
-        BNE nextactive
+        BNE .nextactive
         JMP syntax
-nextactive
+.nextactive
         INC vars,X
-        BNE compareloop
+        BNE .compareloop
         INC vars+1,X
-compareloop
+.compareloop
         LDA vars+1,X
         CMP limithi
-        BCC loopagain
-        BNE loopdone
+        BCC .loopagain
+        BNE .loopdone
         LDA vars,X
         CMP limitlo
-        BCC loopagain
-        BEQ loopagain
-loopdone
+        BCC .loopagain
+        BEQ .loopagain
+.loopdone
         LDA #$ff
         STA forvar
         RTS
-loopagain
+.loopagain
         LDA runmode
-        BEQ loopwithin
+        BEQ .loopwithin
         LDA runlo
         CMP looplo
-        BNE otherline
+        BNE .otherline
         LDA runhi
         CMP loophi
-        BEQ loopwithin
-otherline
+        BEQ .loopwithin
+.otherline
         LDA #1
         STA restart
         RTS
-loopwithin
+.loopwithin
         LDA looppos
         STA pos
         RTS
@@ -574,10 +574,10 @@ expr    JSR term
         STA sumlo
         LDA valhi
         STA sumhi
-exprmore
+.exprmore
         JSR spaces
         CMP #43                 ; '+'
-        BNE exprdone
+        BNE .exprdone
         INC pos
         JSR term
         CLC
@@ -587,8 +587,8 @@ exprmore
         LDA sumhi
         ADC valhi
         STA sumhi
-        JMP exprmore
-exprdone
+        JMP .exprmore
+.exprdone
         LDA sumlo
         STA vallo
         LDA sumhi
@@ -600,15 +600,15 @@ term    JSR atom
         STA termlo
         LDA valhi
         STA termhi
-termmore
+.termmore
         JSR spaces
         CMP #42                 ; '*'
-        BNE termdone
+        BNE .termdone
         INC pos
         JSR atom
         JSR multiply
-        JMP termmore
-termdone
+        JMP .termmore
+.termdone
         LDA termlo
         STA vallo
         LDA termhi
@@ -626,9 +626,9 @@ multiply
         STA tmphi
         LDA #16
         STA count
-mulstep LDA vallo
+.mulstep LDA vallo
         AND #1
-        BEQ mulshift
+        BEQ .mulshift
         CLC
         LDA tmplo
         ADC mullo
@@ -636,13 +636,13 @@ mulstep LDA vallo
         LDA tmphi
         ADC mulhi
         STA tmphi
-mulshift
+.mulshift
         LSR valhi
         ROR vallo
         ASL mullo
         ROL mulhi
         DEC count
-        BNE mulstep
+        BNE .mulstep
         LDA tmplo
         STA termlo
         LDA tmphi
@@ -652,19 +652,19 @@ mulshift
 ; Parse a decimal literal, one-letter variable, or DEC("hex") function.
 atom    JSR spaces
         CMP #48
-        BCC atomletter
+        BCC .atomletter
         CMP #58
-        BCS atomletter
+        BCS .atomletter
         LDA #$00
         STA vallo
         STA valhi
-digitloop
+.digitloop
         LDY pos
         LDA input,Y
         CMP #48
-        BCC digitfinish
+        BCC .digitfinish
         CMP #58
-        BCS digitfinish
+        BCS .digitfinish
         SEC
         SBC #48
         STA digit
@@ -691,42 +691,42 @@ digitloop
         LDA vallo
         ADC digit
         STA vallo
-        BCC digitadded
+        BCC .digitadded
         INC valhi
-digitadded
+.digitadded
         INC pos
-        JMP digitloop
-digitfinish
+        JMP .digitloop
+.digitfinish
         RTS
-atomletter
+.atomletter
         CMP #68                 ; DEC("hex")
-        BNE variable
+        BNE .variable
         LDA pos
         CLC
         ADC #4
         STA pos
         JSR spaces
         CMP #34
-        BEQ decopen
+        BEQ .decopen
         JMP syntax
-decopen
+.decopen
         INC pos
         LDA #$00
         STA vallo
         STA valhi
-decloop LDY pos
+.decloop LDY pos
         LDA input,Y
         CMP #34
-        BEQ decquote
+        BEQ .decquote
         CMP #58
-        BCC decdigit
+        BCC .decdigit
         SEC
         SBC #55                 ; A-F to 10-15
-        JMP decvalue
-decdigit
+        JMP .decvalue
+.decdigit
         SEC
         SBC #48
-decvalue
+.decvalue
         STA digit
         ASL vallo
         ROL valhi
@@ -740,21 +740,21 @@ decvalue
         LDA vallo
         ADC digit
         STA vallo
-        BCC decnextbyte
+        BCC .decnextbyte
         INC valhi
-decnextbyte
+.decnextbyte
         INC pos
-        JMP decloop
-decquote
+        JMP .decloop
+.decquote
         INC pos
         JSR spaces
         CMP #41
-        BEQ decclose
+        BEQ .decclose
         JMP syntax
-decclose
+.decclose
         INC pos
         RTS
-variable
+.variable
         SEC
         SBC #65
         ASL
@@ -764,7 +764,7 @@ variable
         LDA vars+1,X
         STA valhi
         INC pos
-atomdone
+.atomdone
         RTS
 
 ; Clear the packed program and numeric variables when the machine resets.
@@ -777,11 +777,11 @@ initprogram
         JMP clearvars
 clearvars
         LDX #51
-initvars
+.initvars
         LDA #$00
         STA vars,X
         DEX
-        BPL initvars
+        BPL .initvars
         RTS
 
 ; Print the actual number of free bytes from program end to $4000.
@@ -803,31 +803,31 @@ findline
         STA found
         LDA #$12
         STA ptrhi
-findmore
+.findmore
         LDA ptrhi
         CMP endhi
-        BNE findrecord
+        BNE .findrecord
         LDA ptrlo
         CMP endlo
-        BEQ finddone
-findrecord
+        BEQ .finddone
+.findrecord
         LDY #1
         LDA (ptrlo),Y
         CMP linehi
-        BCC findadvance
-        BNE finddone
+        BCC .findadvance
+        BNE .finddone
         DEY
         LDA (ptrlo),Y
         CMP linelo
-        BCC findadvance
-        BNE finddone
+        BCC .findadvance
+        BNE .finddone
         LDA #1
         STA found
-finddone
+.finddone
         RTS
-findadvance
+.findadvance
         JSR advanceptr
-        JMP findmore
+        JMP .findmore
 
 ; Advance ptr by the size byte at record offset two plus its header.
 advanceptr
@@ -838,9 +838,9 @@ advanceptr
         CLC
         ADC ptrlo
         STA ptrlo
-        BCC advanceend
+        BCC .advanceend
         INC ptrhi
-advanceend
+.advanceend
         RTS
 
 ; Store, replace, or delete the line number already parsed from input.
@@ -849,19 +849,19 @@ storeline
         LDX pos
         LDA #0
         STA reclen
-measure LDA input,X
-        BEQ measured
+.measure LDA input,X
+        BEQ .measured
         INC reclen
         INX
-        JMP measure
-measured
+        JMP .measure
+.measured
         LDA reclen
         CLC
         ADC #3
         STA recsize
         JSR findline
         LDA reclen
-        BEQ maybe_delete
+        BEQ .maybe_delete
 
         ; Reserve space before removing the old definition, so a failed edit
         ; leaves the original line intact.
@@ -873,7 +873,7 @@ measured
         ADC #0
         STA newhi
         LDA found
-        BEQ capacity
+        BEQ .capacity
         LDY #2
         LDA (ptrlo),Y
         CLC
@@ -886,23 +886,23 @@ measured
         LDA newhi
         SBC #0
         STA newhi
-capacity
+.capacity
         LDA newhi
         CMP #$40
-        BCC room
-        BNE outofmemory
+        BCC .room
+        BNE .outofmemory
         LDA newlo
-        BNE outofmemory
-room    LDA found
+        BNE .outofmemory
+.room    LDA found
         BEQ insertline
         JSR deleteline
         JMP insertline
-maybe_delete
+.maybe_delete
         LDA found
-        BEQ stored
+        BEQ .stored
         JSR deleteline
-stored  RTS
-outofmemory
+.stored  RTS
+.outofmemory
         LDA #memmsg%256
         STA msglo
         LDA #memmsg/256
@@ -927,26 +927,26 @@ deleteline
         STA dstlo
         LDA ptrhi
         STA dsthi
-deletecopy
+.deletecopy
         LDA srchi
         CMP endhi
-        BNE deletebyte
+        BNE .deletebyte
         LDA srclo
         CMP endlo
-        BEQ deleted
-deletebyte
+        BEQ .deleted
+.deletebyte
         LDY #0
         LDA (srclo),Y
         STA (dstlo),Y
         INC srclo
-        BNE deletedst
+        BNE .deletedst
         INC srchi
-deletedst
+.deletedst
         INC dstlo
-        BNE deletecopy
+        BNE .deletecopy
         INC dsthi
-        JMP deletecopy
-deleted LDA dstlo
+        JMP .deletecopy
+.deleted LDA dstlo
         STA endlo
         LDA dsthi
         STA endhi
@@ -963,29 +963,29 @@ insertline
         STA srchi
         ADC #0
         STA dsthi
-insertmove
+.insertmove
         LDA srchi
         CMP ptrhi
-        BNE insertbyte
+        BNE .insertbyte
         LDA srclo
         CMP ptrlo
-        BEQ insertheader
-insertbyte
+        BEQ .insertheader
+.insertbyte
         LDA srclo
-        BNE insertsrcdec
+        BNE .insertsrcdec
         DEC srchi
-insertsrcdec
+.insertsrcdec
         DEC srclo
         LDA dstlo
-        BNE insertdstdec
+        BNE .insertdstdec
         DEC dsthi
-insertdstdec
+.insertdstdec
         DEC dstlo
         LDY #0
         LDA (srclo),Y
         STA (dstlo),Y
-        JMP insertmove
-insertheader
+        JMP .insertmove
+.insertheader
         LDA newlo
         STA endlo
         LDA newhi
@@ -1001,14 +1001,14 @@ insertheader
         STA (ptrlo),Y
         INY
         LDX pos
-inserttext
+.inserttext
         LDA input,X
-        BEQ inserted
+        BEQ .inserted
         STA (ptrlo),Y
         INX
         INY
-        JMP inserttext
-inserted
+        JMP .inserttext
+.inserted
         RTS
 
 ; List stored source in line-number order using the existing text renderer.
@@ -1025,11 +1025,11 @@ listprogram
         STA maxhi
         JSR spaces
         CMP #45                 ; LIST -last
-        BEQ listhyphen
+        BEQ .listhyphen
         CMP #48
-        BCC liststart
+        BCC .liststart
         CMP #58
-        BCS liststart
+        BCS .liststart
         JSR atom
         LDA vallo
         STA minlo
@@ -1039,56 +1039,56 @@ listprogram
         STA maxhi
         JSR spaces
         CMP #45                 ; LIST first-last or first-
-        BNE liststart
+        BNE .liststart
         LDA #$ff
         STA maxlo
         STA maxhi
-listhyphen
+.listhyphen
         INC pos
         JSR spaces
         CMP #48
-        BCC liststart
+        BCC .liststart
         CMP #58
-        BCS liststart
+        BCS .liststart
         JSR atom
         LDA vallo
         STA maxlo
         LDA valhi
         STA maxhi
-liststart
+.liststart
         LDA #$00
         STA ptrlo
         LDA #$12
         STA ptrhi
-listmore
+.listmore
         LDA ptrhi
         CMP endhi
-        BNE listrecord
+        BNE .listrecord
         LDA ptrlo
         CMP endlo
-        BEQ listdone
-listrecord
+        BEQ .listdone
+.listrecord
         LDY #1
         LDA (ptrlo),Y
         CMP minhi
-        BCC listskip
-        BNE listupper
+        BCC .listskip
+        BNE .listupper
         DEY
         LDA (ptrlo),Y
         CMP minlo
-        BCC listskip
-listupper
+        BCC .listskip
+.listupper
         LDY #1
         LDA (ptrlo),Y
         CMP maxhi
-        BCC listprint
-        BNE listdone
+        BCC .listprint
+        BNE .listdone
         DEY
         LDA (ptrlo),Y
         CMP maxlo
-        BCC listprint
-        BNE listdone
-listprint
+        BCC .listprint
+        BNE .listdone
+.listprint
         LDY #0
         LDA (ptrlo),Y
         STA vallo
@@ -1100,7 +1100,7 @@ listprint
         JSR putchar
         LDA #3
         STA count
-listtext
+.listtext
         LDA count
         SEC
         SBC #3
@@ -1108,19 +1108,19 @@ listtext
         LDY #2
         LDA (ptrlo),Y
         CMP digit
-        BEQ listendline
+        BEQ .listendline
         LDY count
         LDA (ptrlo),Y
         JSR putchar
         INC count
         LDA count
-        JMP listtext
-listendline
+        JMP .listtext
+.listendline
         JSR newline
-listskip
+.listskip
         JSR advanceptr
-        JMP listmore
-listdone
+        JMP .listmore
+.listdone
         RTS
 
 ; Execute each stored line through the same parser used by direct mode.
@@ -1138,14 +1138,14 @@ runprogram_keepvars
         STA restart
         LDA #$ff
         STA forvar
-runnext
+.runnext
         LDA runhi
         CMP endhi
-        BNE runload
+        BNE .runload
         LDA runlo
         CMP endlo
-        BEQ rundone
-runload
+        BEQ .rundone
+.runload
         LDA runlo
         STA ptrlo
         LDA runhi
@@ -1155,15 +1155,15 @@ runload
         STA count
         LDX #0
         LDY #3
-runcopy
+.runcopy
         CPX count
-        BEQ runcopied
+        BEQ .runcopied
         LDA (ptrlo),Y
         STA input,X
         INX
         INY
-        JMP runcopy
-runcopied
+        JMP .runcopy
+.runcopied
         LDA #0
         STA input,X
         LDA resume
@@ -1172,11 +1172,11 @@ runcopied
         STA resume
         JSR execute
         LDA failed
-        BNE rundone
+        BNE .rundone
         LDA restart
-        BEQ runforward
+        BEQ .runforward
         CMP #2
-        BEQ runjump
+        BEQ .runjump
         LDA #0
         STA restart
         LDA looplo
@@ -1185,12 +1185,12 @@ runcopied
         STA runhi
         LDA looppos
         STA resume
-        JMP runnext
-runjump
+        JMP .runnext
+.runjump
         LDA #0
         STA restart
-        JMP runnext
-runforward
+        JMP .runnext
+.runforward
         LDA runlo
         STA ptrlo
         LDA runhi
@@ -1200,8 +1200,8 @@ runforward
         STA runlo
         LDA ptrhi
         STA runhi
-        JMP runnext
-rundone
+        JMP .runnext
+.rundone
         LDA #0
         STA runmode
         RTS

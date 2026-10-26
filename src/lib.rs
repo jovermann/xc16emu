@@ -375,6 +375,7 @@ impl Machine {
     /// Arguments: self is the machine. Returns: 25 newline-separated 40-character rows.
     pub fn capture_text_screen(&self) -> String {
         let base = ((self.ted.registers[0x14] & 0xf8) as usize) << 8;
+        let full_glyph_set = self.ted.registers[0x07] & 0x80 != 0;
         let mut out = String::with_capacity(1024);
         for row in 0..25 {
             if row != 0 {
@@ -382,7 +383,7 @@ impl Machine {
             }
             for col in 0..40 {
                 let code = self.ram[(base + 0x400 + row * 40 + col) & self.ram_mask as usize];
-                out.push(screen_code_to_char(code));
+                out.push(screen_code_to_char(code, full_glyph_set));
             }
         }
         out
@@ -774,8 +775,12 @@ impl Machine {
 }
 
 /// Turn Commodore screen codes into ASCII for deterministic assertions.
-/// Arguments: code is the screen byte. Returns: one printable character.
-fn screen_code_to_char(code: u8) -> char {
+/// Arguments: code is the screen byte; full_glyph_set selects 256 real glyphs
+/// instead of 128 glyphs plus reverse video. Returns: one printable character.
+fn screen_code_to_char(code: u8, full_glyph_set: bool) -> char {
+    if full_glyph_set && (0x81..=0x9a).contains(&code) {
+        return (b'a' + code - 0x81) as char;
+    }
     match code & 0x7f {
         0 => '@',
         1..=26 => (b'A' + (code & 0x7f) - 1) as char,

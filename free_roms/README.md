@@ -2,7 +2,11 @@
 
 `basrom.asm` and `sysrom.asm` are independently written 6502 assembly sources.
 They build into the 16 KiB `basrom.dat` and `sysrom.dat` images required by
-xc16emu. The bold font in `sysrom.asm` is independently drawn.
+xc16emu. The system ROM has a bold, angular science-fiction typeface with
+uppercase, lowercase, symbols, and graphics across both C16 character sets.
+Its native line and block graphics join across character cells. The ROM uses
+the second set's duplicate positions for extra ASCII punctuation accepted by
+the free BASIC editor.
 The startup banner identifies this early interpreter as **FREE BASIC V0.1**.
 
 ## ROM space used
@@ -10,7 +14,7 @@ The startup banner identifies this early interpreter as **FREE BASIC V0.1**.
 | ROM | Capacity | Used | Free |
 | --- | ---: | ---: | ---: |
 | `basrom.dat` | 16,384 bytes | 2,081 bytes | 14,303 bytes |
-| `sysrom.dat` | 16,384 bytes | 3,531 bytes | 12,853 bytes |
+| `sysrom.dat` | 16,384 bytes | 3,576 bytes | 12,808 bytes |
 
 These counts come from the current assembled address ranges, including the
 system ROM's 2,048-byte font area and the BASIC ROM's one-byte end marker.

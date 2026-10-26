@@ -2,8 +2,8 @@
 ; SPDX-License-Identifier: BSL-1.0
 ;
 ; Independently written minimal Plus/4 system ROM. The fixed entry points at
-; $C800 are the private interface used by basrom.asm. No original ROM code or
-; character bitmaps are used here.
+; $C800 are the private interface used by basrom.asm. No original ROM machine
+; code is used here.
 
         ASS $C000
 
@@ -47,10 +47,10 @@ reset   SEI
         STA editpos
         STA rowidx
         LDX #24
-clearlinks
+.clearlinks
         STA rowlink,X
         DEX
-        BPL clearlinks
+        BPL .clearlinks
         JSR $8003               ; reset numbered program and variables
         LDA #$ff
         STA lastkey
@@ -62,8 +62,9 @@ clearlinks
         ; Match the observed Plus/4 text colors and matrix layout.
         LDA #$1b
         STA $ff06               ; screen on, 25 text rows
+        LDA #$88
+        STA $ff07               ; 40 columns, all 256 glyph indices visible
         LDA #$08
-        STA $ff07               ; 40 columns
         STA $ff14               ; color at $0800, text at $0c00
         LDA #$04
         STA $ff12               ; glyphs come from the system ROM
@@ -80,7 +81,7 @@ clearlinks
         LDA #$6e
         STA $ff19               ; original blue border
         LDX #$00
-clear   LDA #$10                ; dark foreground on white
+.clear   LDA #$10                ; dark foreground on white
         STA $0800,X
         STA $0900,X
         STA $0a00,X
@@ -91,7 +92,7 @@ clear   LDA #$10                ; dark foreground on white
         STA $0e00,X
         STA $0f00,X
         INX
-        BNE clear
+        BNE .clear
 
         JSR newline             ; first screen row is blank
         JSR draw_title
@@ -119,72 +120,72 @@ draw_title
 inputloop
         JSR scan
         CMP #$ff
-        BNE havekey
+        BNE .havekey
         STA lastkey
         JMP inputloop
-havekey CMP lastkey
-        BNE newkey
+.havekey CMP lastkey
+        BNE .newkey
         JMP inputloop
-newkey  STA lastkey
+.newkey  STA lastkey
         TAX
         CPX #48                 ; cursor left
-        BNE notleft
+        BNE .notleft
         JMP cursorleft
-notleft
+.notleft
         CPX #51                 ; cursor right
-        BNE notright
+        BNE .notright
         JMP cursorright
-notright
+.notright
         CPX #43                 ; cursor up moves to the prior screen row
-        BNE notup
+        BNE .notup
         JMP cursorup
-notup
+.notup
         CPX #40                 ; cursor down moves to the next screen row
-        BNE notdown
+        BNE .notdown
         JMP cursordown
-notdown
+.notdown
         CPX #3                  ; DEL clears the body, retaining line number
-        BNE notdelete
+        BNE .notdelete
         JMP clearbody
-notdelete
+.notdelete
         JSR readshift           ; key press may begin halfway through a scan
         LDY shifted
-        BEQ keyunshifted
+        BEQ .keyunshifted
         LDA shiftedchars,X
-        BNE keyplain
-keyunshifted
+        BNE .keyplain
+.keyunshifted
         LDA keychars,X
         BEQ inputloop
-keyplain
+.keyplain
         CMP #13
-        BEQ entered
+        BEQ .entered
         CMP #8
-        BEQ erasekey
+        BEQ .erasekey
         STA letter
         LDA editpos
         CMP #79
         BCS inputloop
         LDX linelen
-pad_to_cursor
+.pad_to_cursor
         CPX editpos
-        BCS padded
+        BCS .padded
         LDA #32
         STA input,X
         INX
         STX linelen
-        JMP pad_to_cursor
-padded
+        JMP .pad_to_cursor
+.padded
         LDX linelen
         CPX #79
         BCS inputloop
-insertshift
+.insertshift
         CPX editpos
-        BEQ insertchar
+        BEQ .insertchar
         DEX
         LDA input,X
         STA input+1,X
-        JMP insertshift
-insertchar
+        JMP .insertshift
+.insertchar
         LDX editpos
         LDA letter
         STA input,X
@@ -192,39 +193,39 @@ insertchar
         INC editpos
         JSR redraw_insert
         JMP inputloop
-erasekey
+.erasekey
         LDA editpos
-        BEQ delete_under
+        BEQ .delete_under
         JSR retreat
         DEC editpos
-delete_under
+.delete_under
         LDA editpos
         CMP linelen
-        BCC delete_now
+        BCC .delete_now
         JMP inputloop
-delete_now
+.delete_now
         LDX editpos
-deleteshift
+.deleteshift
         INX
         LDA input,X
         DEX
         STA input,X
         INX
         CPX linelen
-        BNE deleteshift
+        BNE .deleteshift
         DEC linelen
         JSR redraw_delete
         JMP inputloop
-entered LDX linelen
+.entered LDX linelen
         LDA #$00
         STA input,X
         JSR endcursor
         JSR newline
         JSR $8000               ; one direct-mode BASIC statement list
         LDA storedline
-        BNE entered_done        ; storing a line leaves a blank input row
+        BNE .entered_done        ; storing a line leaves a blank input row
         JSR ready
-entered_done
+.entered_done
         LDA #$00
         STA linelen
         STA editpos
@@ -233,9 +234,9 @@ entered_done
 ; Move the input cursor left without changing the character underneath.
 cursorleft
         LDA editpos
-        BNE leftmove
+        BNE .leftmove
         JMP inputloop
-leftmove
+.leftmove
         DEC editpos
         JSR retreat
         JMP inputloop
@@ -244,9 +245,9 @@ leftmove
 cursorright
         LDA editpos
         CMP #79
-        BCC rightmove
+        BCC .rightmove
         JMP inputloop
-rightmove
+.rightmove
         INC editpos
         JSR advance
         JMP inputloop
@@ -254,9 +255,9 @@ rightmove
 ; Move one physical row up and import that row's linked logical line.
 cursorup
         LDA rowidx
-        BNE upmove
+        BNE .upmove
         JMP inputloop
-upmove
+.upmove
         DEC rowidx
         SEC
         LDA celllo
@@ -280,9 +281,9 @@ upmove
 cursordown
         LDA rowidx
         CMP #24
-        BCC downmove
+        BCC .downmove
         JMP inputloop
-downmove
+.downmove
         INC rowidx
         CLC
         LDA celllo
@@ -306,29 +307,29 @@ downmove
 clearbody
         JSR endcursor
         LDX #0
-bodydigits
+.bodydigits
         LDA input,X
         CMP #48
-        BCC bodyclear
+        BCC .bodyclear
         CMP #58
-        BCS bodyclear
+        BCS .bodyclear
         INX
         CPX linelen
-        BNE bodydigits
-bodyclear
+        BNE .bodydigits
+.bodyclear
         STX keybit              ; temporary count of preserved digits
-bodymore
+.bodymore
         LDA linelen
         CMP keybit
-        BEQ bodydone
+        BEQ .bodydone
         JSR retreat
         DEC linelen
         DEC editpos
         LDY #0
         LDA #32
         STA (screenlo),Y
-        JMP bodymore
-bodydone
+        JMP .bodymore
+.bodydone
         LDX linelen
         LDA #0
         STA input,X
@@ -338,8 +339,8 @@ bodydone
 endcursor
         LDA editpos
         CMP linelen
-        BEQ enddone
-        BCC endforward
+        BEQ .enddone
+        BCC .endforward
         SEC
         SBC linelen
         TAX
@@ -347,11 +348,11 @@ endcursor
         LDA linelen
         STA editpos
         RTS
-endforward
+.endforward
         INC editpos
         JSR advance
         JMP endcursor
-enddone
+.enddone
         RTS
 
 ; Follow screen-row continuation links and import the selected logical line.
@@ -359,19 +360,19 @@ enddone
 load_line
         LDA rowidx
         STA startrow
-line_start
+.line_start
         LDX startrow
-        BEQ start_found
+        BEQ .start_found
         LDA rowlink,X
-        BEQ start_found
+        BEQ .start_found
         DEC startrow
-        JMP line_start
-start_found
+        JMP .line_start
+.start_found
         LDA #0
         STA textlen
         LDA startrow
         STA copyrowidx
-import_row
+.import_row
         LDX copyrowidx
         LDA rowlo,X
         STA srclo
@@ -381,56 +382,56 @@ import_row
         STA rowcount
         INX
         CPX #25
-        BCS trim_row
+        BCS .trim_row
         LDA rowlink,X
-        BNE import_cells
-trim_row
+        BNE .import_cells
+.trim_row
         LDY #39
-find_tail
+.find_tail
         LDA (srclo),Y
         AND #$7f
         CMP #32
-        BNE tail_found
+        BNE .tail_found
         DEY
-        BPL find_tail
+        BPL .find_tail
         LDA #0
         STA rowcount
-        BEQ import_cells
-tail_found
+        BEQ .import_cells
+.tail_found
         TYA
         CLC
         ADC #1
         STA rowcount
-import_cells
+.import_cells
         LDY #0
-import_byte
+.import_byte
         CPY rowcount
-        BEQ row_imported
+        BEQ .row_imported
         LDA (srclo),Y
         AND #$7f
         CMP #32
-        BCS imported_ascii
+        BCS .imported_ascii
         CLC
         ADC #64                 ; TED screen codes 0..31 to ASCII
-imported_ascii
+.imported_ascii
         LDX textlen
         STA input,X
         INC textlen
         LDA textlen
         CMP #79
-        BEQ import_done
+        BEQ .import_done
         INY
-        JMP import_byte
-row_imported
+        JMP .import_byte
+.row_imported
         LDX copyrowidx
         INX
         CPX #25
-        BCS import_done
+        BCS .import_done
         LDA rowlink,X
-        BEQ import_done
+        BEQ .import_done
         STX copyrowidx
-        JMP import_row
-import_done
+        JMP .import_row
+.import_done
         LDX textlen
         STX linelen
         LDA #0
@@ -438,19 +439,19 @@ import_done
         LDA rowidx
         SEC
         SBC startrow
-        BEQ same_row
+        BEQ .same_row
         CMP #1
-        BNE beyond_row
+        BNE .beyond_row
         LDA column
         CLC
         ADC #40
-        JMP clamp_edit
-same_row
+        JMP .clamp_edit
+.same_row
         LDA column
-        JMP clamp_edit
-beyond_row
+        JMP .clamp_edit
+.beyond_row
         LDA #79
-clamp_edit
+.clamp_edit
         STA editpos
         RTS
 
@@ -482,43 +483,43 @@ redraw_delete
 ; Print input bytes from X through the end without changing editpos.
 redraw_tail
         CPX linelen
-        BEQ taildone
+        BEQ .taildone
         LDA input,X
         JSR putchar
         INX
         JMP redraw_tail
-taildone
+.taildone
         RTS
 
 ; Move the display cursor back X cells while preserving the input buffer.
 retreat_count
         CPX #0
-        BEQ retreat_done
-retreat_next
+        BEQ .retreat_done
+.retreat_next
         JSR retreat
         DEX
-        BNE retreat_next
-retreat_done
+        BNE .retreat_next
+.retreat_done
         RTS
 
 ; Decrement screen pointer, cell index, and column without erasing a glyph.
 retreat
         LDA screenlo
-        BNE backscreen
+        BNE .backscreen
         DEC screenhi
-backscreen
+.backscreen
         DEC screenlo
         LDA celllo
-        BNE backcell
+        BNE .backcell
         DEC cellhi
-backcell
+.backcell
         DEC celllo
         LDA column
-        BNE backcolumn
+        BNE .backcolumn
         DEC rowidx
         LDA #40
         STA column
-backcolumn
+.backcolumn
         DEC column
         JMP sync_cursor
 
@@ -527,7 +528,7 @@ backcolumn
 scan    LDA #$00
         STA shifted
         LDX #$00
-scanrow LDA rows,X
+.scanrow LDA rows,X
         STA $fd30
         LDA #$ff
         STA $ff08
@@ -535,29 +536,29 @@ scanrow LDA rows,X
         EOR #$ff
         STA keybits
         CPX #$01
-        BNE scanbits
+        BNE .scanbits
         AND #$80
-        BEQ scanbits
+        BEQ .scanbits
         LDA #$01
         STA shifted
         LDA keybits
         AND #$7f
         STA keybits
-scanbits
+.scanbits
         LDA keybits
-        BEQ nextrow
+        BEQ .nextrow
         LDY #$00
-findbit LSR
-        BCS foundbit
+.findbit LSR
+        BCS .foundbit
         INY
         CPY #$08
-        BNE findbit
-nextrow INX
+        BNE .findbit
+.nextrow INX
         CPX #$08
-        BNE scanrow
+        BNE .scanrow
         LDA #$ff
         RTS
-foundbit
+.foundbit
         STY keybit
         TXA
         ASL
@@ -575,20 +576,20 @@ readshift
         STA $ff08
         LDA $ff08
         AND #$80
-        BNE unshifted
+        BNE .unshifted
         LDA #$01
         STA shifted
         RTS
-unshifted
+.unshifted
         LDA #$00
         STA shifted
         RTS
 
 ; Return to a fresh prompt. A pending semicolon PRINT result gets a newline.
 ready   LDA column
-        BEQ readyl
+        BEQ .readyl
         JSR newline
-readyl  LDA #readymsg%256
+.readyl  LDA #readymsg%256
         STA msglo
         LDA #readymsg/256
         STA msghi
@@ -596,37 +597,65 @@ readyl  LDA #readymsg%256
         JSR newline
         RTS
 
-; Output ASCII A as a TED screen code. The public entry at $C800 preserves X.
+; Output ASCII A as a TED screen code and return the original byte in A.
+; Capitals use native codes 1..26 and lowercase uses the second set.
+; Extra ASCII punctuation uses duplicate glyph slots in that set.
+; The public entry at $C800 preserves X.
 putchar STA letter
         CMP #13
-        BEQ putnewline
+        BEQ .putnewline
         CMP #65
-        BCC rawcode
+        BCC .other_ascii
         CMP #91
-        BCS rawcode
+        BCS .after_capital
         SEC
         SBC #64
-rawcode LDY #$00
+        JMP .writecode
+.after_capital
+        CMP #97
+        BCC .other_ascii
+        CMP #123
+        BCS .other_ascii
+        SEC
+        SBC #96
+        ORA #$80                ; second-set lowercase at $81..$9a
+        JMP .writecode
+.other_ascii
+        CMP #94
+        BEQ .caret
+        CMP #95
+        BEQ .underscore
+        CMP #64
+        BCC .writecode
+        ORA #$80
+        JMP .writecode
+.caret
+        LDA #$9e
+        JMP .writecode
+.underscore
+        LDA #$9f
+.writecode
+        LDY #$00
         STA (screenlo),Y
         JSR advance
         LDA letter
         RTS
-putnewline
+.putnewline
         JSR newline
         LDA letter
         RTS
 
 ; Output the zero-terminated text at msglo:msghi.
 printz  LDY #$00
-printzlp
+.printzlp
         LDA (msglo),Y
-        BEQ printdone
+        BEQ .printdone
         JSR putchar
         INC msglo
-        BNE printzlp
+        BNE .printzlp
         INC msghi
-        JMP printzlp
-printdone
+        JMP .printzlp
+.printdone
         RTS
 
 ; Move to the next text row, scrolling when the bottom row is full.
@@ -634,10 +663,10 @@ newline LDA #40
         SEC
         SBC column
         TAX
-newlinelp
+.newlinelp
         JSR advance
         DEX
-        BNE newlinelp
+        BNE .newlinelp
         TXA
         PHA
         LDX rowidx
@@ -649,15 +678,15 @@ newlinelp
 
 ; Advance one matrix cell and update TED's blinking text cursor.
 advance INC screenlo
-        BNE advcell
+        BNE .advcell
         INC screenhi
-advcell INC celllo
-        BNE advcol
+.advcell INC celllo
+        BNE .advcol
         INC cellhi
-advcol  INC column
+.advcol  INC column
         LDA column
         CMP #40
-        BNE advwrap
+        BNE .advwrap
         LDA #$00
         STA column
         INC rowidx
@@ -665,20 +694,20 @@ advcol  INC column
         PHA
         LDX rowidx
         CPX #25
-        BCS adv_nomark
+        BCS .adv_nomark
         LDA #1
         STA rowlink,X           ; automatic wrap links adjacent screen rows
-adv_nomark
+.adv_nomark
         PLA
         TAX
-advwrap LDA cellhi
+.advwrap LDA cellhi
         CMP #$03
         BCC cursor
-        BNE wrap
+        BNE .wrap
         LDA celllo
         CMP #$e8
         BCC cursor
-wrap    TXA
+.wrap    TXA
         PHA
         JSR scrollscreen
         PLA
@@ -703,7 +732,7 @@ cursor  LDA cellhi
 ; Copying forward is safe because the destination precedes the source.
 scrollscreen
         LDX #0
-scrollpages
+.scrollpages
         LDA $0c28,X
         STA $0c00,X
         LDA $0d28,X
@@ -717,32 +746,32 @@ scrollpages
         LDA $0a28,X
         STA $0a00,X
         INX
-        BNE scrollpages
+        BNE .scrollpages
         LDX #0
-scrolltail
+.scrolltail
         LDA $0f28,X
         STA $0f00,X
         LDA $0b28,X
         STA $0b00,X
         INX
         CPX #$c0               ; 192 cells after the first 768
-        BNE scrolltail
+        BNE .scrolltail
         LDX #0
-scrollblank
+.scrollblank
         LDA #32
         STA $0fc0,X
         LDA #$10
         STA $0bc0,X
         INX
         CPX #40
-        BNE scrollblank
+        BNE .scrollblank
         LDX #0
-scrolllinks
+.scrolllinks
         LDA rowlink+1,X
         STA rowlink,X
         INX
         CPX #24
-        BNE scrolllinks
+        BNE .scrolllinks
         LDA #1
         STA rowlink+24
         RTS
@@ -786,140 +815,2318 @@ api_char JMP putchar
 api_text JMP printz
 api_line JMP newline
 
-; The following 2 KiB holds independently drawn bold letterforms in 8-byte cells.
-; Most letter and digit strokes span two raster pixels for a fuller face.
+; The following 2 KiB holds angular, bold letterforms and C16 graphic symbols.
+; It covers both original 128-glyph sets. Native line and block graphics keep
+; the geometry needed to join across character cells. Duplicate slots in the
+; second set also show extended ASCII punctuation accepted by this editor.
+; Each quoted pixel row contains eight positions (# is set, . is clear).
+; The original column shows the corresponding reference-system-ROM byte.
         ORG $D000
 glyphs
-        BYT $38,$44,$5c,$54,$5c,$40,$38,$00 ; 00 @
-        BYT $3c,$66,$66,$7e,$66,$66,$66,$00 ; 01 A
-        BYT $7c,$66,$66,$7c,$66,$66,$7c,$00 ; 02 B
-        BYT $3e,$60,$60,$60,$60,$60,$3e,$00 ; 03 C
-        BYT $7c,$66,$66,$66,$66,$66,$7c,$00 ; 04 D
-        BYT $7e,$60,$60,$7c,$60,$60,$7e,$00 ; 05 E
-        BYT $7e,$60,$60,$7c,$60,$60,$60,$00 ; 06 F
-        BYT $3e,$60,$60,$7e,$66,$66,$3e,$00 ; 07 G
-        BYT $66,$66,$66,$7e,$66,$66,$66,$00 ; 08 H
-        BYT $7e,$18,$18,$18,$18,$18,$7e,$00 ; 09 I
-        BYT $1e,$0c,$0c,$0c,$6c,$6c,$38,$00 ; 10 J
-        BYT $66,$6c,$78,$70,$78,$6c,$66,$00 ; 11 K
-        BYT $60,$60,$60,$60,$60,$60,$7e,$00 ; 12 L
-        BYT $66,$7e,$7e,$7e,$66,$66,$66,$00 ; 13 M
-        BYT $66,$76,$7e,$6e,$66,$66,$66,$00 ; 14 N
-        BYT $3c,$66,$66,$66,$66,$66,$3c,$00 ; 15 O
-        BYT $7c,$66,$66,$7c,$60,$60,$60,$00 ; 16 P
-        BYT $3c,$66,$66,$66,$7e,$6c,$3e,$00 ; 17 Q
-        BYT $7c,$66,$66,$7c,$78,$6c,$66,$00 ; 18 R
-        BYT $3e,$60,$60,$3c,$06,$06,$7c,$00 ; 19 S
-        BYT $7e,$18,$18,$18,$18,$18,$18,$00 ; 20 T
-        BYT $66,$66,$66,$66,$66,$66,$3c,$00 ; 21 U
-        BYT $66,$66,$66,$66,$66,$3c,$18,$00 ; 22 V
-        BYT $66,$66,$66,$7e,$7e,$7e,$3c,$00 ; 23 W
-        BYT $66,$66,$3c,$18,$3c,$66,$66,$00 ; 24 X
-        BYT $66,$66,$3c,$18,$18,$18,$18,$00 ; 25 Y
-        BYT $7e,$06,$0c,$18,$30,$60,$7e,$00 ; 26 Z
-        BYT $38,$20,$20,$20,$20,$20,$38,$00 ; 27 [
-        BYT $40,$20,$20,$10,$08,$08,$04,$00 ; 28 \
-        BYT $38,$08,$08,$08,$08,$08,$38,$00 ; 29 ]
-        BYT $10,$28,$44,$00,$00,$00,$00,$00 ; 30 ^
-        BYT $00,$00,$00,$00,$00,$00,$7c,$00 ; 31 _
-        BYT $00,$00,$00,$00,$00,$00,$00,$00 ; 32  
-        BYT $10,$10,$10,$10,$10,$00,$10,$00 ; 33 !
-        BYT $28,$28,$28,$00,$00,$00,$00,$00 ; 34 "
-        BYT $28,$28,$7c,$28,$7c,$28,$28,$00 ; 35 #
-        BYT $10,$3c,$50,$38,$14,$78,$10,$00 ; 36 $
-        BYT $64,$68,$08,$10,$20,$2c,$4c,$00 ; 37 %
-        BYT $30,$48,$50,$20,$54,$48,$34,$00 ; 38 &
-        BYT $10,$10,$10,$00,$00,$00,$00,$00 ; 39 '
-        BYT $08,$10,$20,$20,$20,$10,$08,$00 ; 40 (
-        BYT $20,$10,$08,$08,$08,$10,$20,$00 ; 41 )
-        BYT $00,$54,$38,$7c,$38,$54,$00,$00 ; 42 *
-        BYT $00,$10,$10,$7c,$10,$10,$00,$00 ; 43 +
-        BYT $00,$00,$00,$00,$10,$10,$20,$00 ; 44 ,
-        BYT $00,$00,$00,$7c,$00,$00,$00,$00 ; 45 -
-        BYT $00,$00,$00,$00,$00,$30,$30,$00 ; 46 .
-        BYT $04,$08,$08,$10,$20,$20,$40,$00 ; 47 /
-        ; A single-pixel diagonal distinguishes zero from O without filling it.
-        BYT $3c,$42,$46,$4a,$52,$62,$3c,$00 ; 48 0
-        BYT $18,$38,$18,$18,$18,$18,$3c,$00 ; 49 1
-        BYT $3c,$66,$06,$0c,$18,$30,$7e,$00 ; 50 2
-        BYT $7c,$06,$06,$3c,$06,$06,$7c,$00 ; 51 3
-        BYT $0c,$1c,$3c,$6c,$7e,$0c,$0c,$00 ; 52 4
-        BYT $7e,$60,$60,$7c,$06,$06,$7c,$00 ; 53 5
-        BYT $3e,$60,$60,$7c,$66,$66,$3c,$00 ; 54 6
-        BYT $7e,$06,$0c,$18,$30,$30,$30,$00 ; 55 7
-        BYT $3c,$66,$66,$3c,$66,$66,$3c,$00 ; 56 8
-        BYT $3c,$66,$66,$3e,$06,$06,$7c,$00 ; 57 9
-        BYT $00,$10,$10,$00,$10,$10,$00,$00 ; 58 :
-        BYT $00,$10,$10,$00,$10,$10,$20,$00 ; 59 ;
-        BYT $08,$10,$20,$40,$20,$10,$08,$00 ; 60 <
-        BYT $00,$7c,$00,$7c,$00,$00,$00,$00 ; 61 =
-        BYT $20,$10,$08,$04,$08,$10,$20,$00 ; 62 >
-        BYT $38,$44,$04,$08,$10,$00,$10,$00 ; 63 ?
-        BYT $38,$44,$5c,$54,$5c,$40,$38,$00 ; 64 @
-        BYT $3c,$66,$66,$7e,$66,$66,$66,$00 ; 65 A
-        BYT $7c,$66,$66,$7c,$66,$66,$7c,$00 ; 66 B
-        BYT $3e,$60,$60,$60,$60,$60,$3e,$00 ; 67 C
-        BYT $7c,$66,$66,$66,$66,$66,$7c,$00 ; 68 D
-        BYT $7e,$60,$60,$7c,$60,$60,$7e,$00 ; 69 E
-        BYT $7e,$60,$60,$7c,$60,$60,$60,$00 ; 70 F
-        BYT $3e,$60,$60,$7e,$66,$66,$3e,$00 ; 71 G
-        BYT $66,$66,$66,$7e,$66,$66,$66,$00 ; 72 H
-        BYT $7e,$18,$18,$18,$18,$18,$7e,$00 ; 73 I
-        BYT $1e,$0c,$0c,$0c,$6c,$6c,$38,$00 ; 74 J
-        BYT $66,$6c,$78,$70,$78,$6c,$66,$00 ; 75 K
-        BYT $60,$60,$60,$60,$60,$60,$7e,$00 ; 76 L
-        BYT $66,$7e,$7e,$7e,$66,$66,$66,$00 ; 77 M
-        BYT $66,$76,$7e,$6e,$66,$66,$66,$00 ; 78 N
-        BYT $3c,$66,$66,$66,$66,$66,$3c,$00 ; 79 O
-        BYT $7c,$66,$66,$7c,$60,$60,$60,$00 ; 80 P
-        BYT $3c,$66,$66,$66,$7e,$6c,$3e,$00 ; 81 Q
-        BYT $7c,$66,$66,$7c,$78,$6c,$66,$00 ; 82 R
-        BYT $3e,$60,$60,$3c,$06,$06,$7c,$00 ; 83 S
-        BYT $7e,$18,$18,$18,$18,$18,$18,$00 ; 84 T
-        BYT $66,$66,$66,$66,$66,$66,$3c,$00 ; 85 U
-        BYT $66,$66,$66,$66,$66,$3c,$18,$00 ; 86 V
-        BYT $66,$66,$66,$7e,$7e,$7e,$3c,$00 ; 87 W
-        BYT $66,$66,$3c,$18,$3c,$66,$66,$00 ; 88 X
-        BYT $66,$66,$3c,$18,$18,$18,$18,$00 ; 89 Y
-        BYT $7e,$06,$0c,$18,$30,$60,$7e,$00 ; 90 Z
-        BYT $38,$20,$20,$20,$20,$20,$38,$00 ; 91 [
-        BYT $40,$20,$20,$10,$08,$08,$04,$00 ; 92 \
-        BYT $38,$08,$08,$08,$08,$08,$38,$00 ; 93 ]
-        BYT $10,$28,$44,$00,$00,$00,$00,$00 ; 94 ^
-        BYT $00,$00,$00,$00,$00,$00,$7c,$00 ; 95 _
-        BYT $20,$10,$08,$00,$00,$00,$00,$00 ; 96 `
-        BYT $3c,$66,$66,$7e,$66,$66,$66,$00 ; 97 a
-        BYT $7c,$66,$66,$7c,$66,$66,$7c,$00 ; 98 b
-        BYT $3e,$60,$60,$60,$60,$60,$3e,$00 ; 99 c
-        BYT $7c,$66,$66,$66,$66,$66,$7c,$00 ; 100 d
-        BYT $7e,$60,$60,$7c,$60,$60,$7e,$00 ; 101 e
-        BYT $7e,$60,$60,$7c,$60,$60,$60,$00 ; 102 f
-        BYT $3e,$60,$60,$7e,$66,$66,$3e,$00 ; 103 g
-        BYT $66,$66,$66,$7e,$66,$66,$66,$00 ; 104 h
-        BYT $7e,$18,$18,$18,$18,$18,$7e,$00 ; 105 i
-        BYT $1e,$0c,$0c,$0c,$6c,$6c,$38,$00 ; 106 j
-        BYT $66,$6c,$78,$70,$78,$6c,$66,$00 ; 107 k
-        BYT $60,$60,$60,$60,$60,$60,$7e,$00 ; 108 l
-        BYT $66,$7e,$7e,$7e,$66,$66,$66,$00 ; 109 m
-        BYT $66,$76,$7e,$6e,$66,$66,$66,$00 ; 110 n
-        BYT $3c,$66,$66,$66,$66,$66,$3c,$00 ; 111 o
-        BYT $7c,$66,$66,$7c,$60,$60,$60,$00 ; 112 p
-        BYT $3c,$66,$66,$66,$7e,$6c,$3e,$00 ; 113 q
-        BYT $7c,$66,$66,$7c,$78,$6c,$66,$00 ; 114 r
-        BYT $3e,$60,$60,$3c,$06,$06,$7c,$00 ; 115 s
-        BYT $7e,$18,$18,$18,$18,$18,$18,$00 ; 116 t
-        BYT $66,$66,$66,$66,$66,$66,$3c,$00 ; 117 u
-        BYT $66,$66,$66,$66,$66,$3c,$18,$00 ; 118 v
-        BYT $66,$66,$66,$7e,$7e,$7e,$3c,$00 ; 119 w
-        BYT $66,$66,$3c,$18,$3c,$66,$66,$00 ; 120 x
-        BYT $66,$66,$3c,$18,$18,$18,$18,$00 ; 121 y
-        BYT $7e,$06,$0c,$18,$30,$60,$7e,$00 ; 122 z
-        BYT $0c,$10,$10,$60,$10,$10,$0c,$00 ; 123 {
-        BYT $10,$10,$10,$10,$10,$10,$10,$00 ; 124 |
-        BYT $60,$10,$10,$0c,$10,$10,$60,$00 ; 125 }
-        BYT $00,$00,$24,$58,$00,$00,$00,$00 ; 126 ~
-        DSB 1032
-
+; Screen code $00 (@)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##.###." ; original %".##.###."
+        BYT %".##.#.#." ; original %".##.###."
+        BYT %".##.###." ; original %".##....."
+        BYT %".##....." ; original %".##...#."
+        BYT %"..#####." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $01 (A)
+        BYT %"..####.." ; original %"...##..."
+        BYT %".##..##." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".######." ; original %".######."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $02 (B)
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %"........" ; original %"........"
+; Screen code $03 (C)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"##......" ; original %".##....."
+        BYT %"##......" ; original %".##....."
+        BYT %".##....." ; original %".##..##."
+        BYT %"..#####." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $04 (D)
+        BYT %".#####.." ; original %".####..."
+        BYT %".##..##." ; original %".##.##.."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##..##." ; original %".##.##.."
+        BYT %".#####.." ; original %".####..."
+        BYT %"........" ; original %"........"
+; Screen code $05 (E)
+        BYT %".######." ; original %".######."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".#####.." ; original %".####..."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $06 (F)
+        BYT %".######." ; original %".######."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".#####.." ; original %".####..."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $07 (G)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"##..###." ; original %".##.###."
+        BYT %"##...##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $08 (H)
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".######." ; original %".######."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $09 (I)
+        BYT %".######." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %".######." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $0A (J)
+        BYT %"..#####." ; original %"...####."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %".##.##.." ; original %"....##.."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %"..###..." ; original %"..###..."
+        BYT %"........" ; original %"........"
+; Screen code $0B (K)
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".####..." ; original %".####..."
+        BYT %".###...." ; original %".###...."
+        BYT %".####..." ; original %".####..."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $0C (L)
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $0D (M)
+        BYT %"##....##" ; original %".##...##"
+        BYT %"###..###" ; original %".###.###"
+        BYT %"########" ; original %".#######"
+        BYT %"##.##.##" ; original %".##.#.##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"........" ; original %"........"
+; Screen code $0E (N)
+        BYT %"##....##" ; original %".##..##."
+        BYT %"###...##" ; original %".###.##."
+        BYT %"####..##" ; original %".######."
+        BYT %"##.##.##" ; original %".######."
+        BYT %"##..####" ; original %".##.###."
+        BYT %"##...###" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $0F (O)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $10 (P)
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $11 (Q)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##..#.##" ; original %".##..##."
+        BYT %".##..##." ; original %"..####.."
+        BYT %"..#####." ; original %"....###."
+        BYT %"........" ; original %"........"
+; Screen code $12 (R)
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".####..." ; original %".####..."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $13 (S)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".##..##."
+        BYT %".#####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $14 (T)
+        BYT %"########" ; original %".######."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $15 (U)
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $16 (V)
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $17 (W)
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##.##.##" ; original %".##.#.##"
+        BYT %"########" ; original %".#######"
+        BYT %"###..###" ; original %".###.###"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"........" ; original %"........"
+; Screen code $18 (X)
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $19 (Y)
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %".##..##."
+        BYT %"...##..." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $1A (Z)
+        BYT %".######." ; original %".######."
+        BYT %".....##." ; original %".....##."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..##...." ; original %"..##...."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $1B ([)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %"..##...."
+        BYT %".##....." ; original %"..##...."
+        BYT %".#####.." ; original %"..##...."
+        BYT %".##....." ; original %"..##...."
+        BYT %".##..##." ; original %"..##...."
+        BYT %".######." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $1C (\)
+        BYT %"...##..." ; original %"....##.."
+        BYT %"..####.." ; original %"...#..#."
+        BYT %".##..##." ; original %"..##...."
+        BYT %"...##..." ; original %".#####.."
+        BYT %"...##..." ; original %"..##...."
+        BYT %"...##..." ; original %".##...#."
+        BYT %"...##..." ; original %"######.."
+        BYT %"........" ; original %"........"
+; Screen code $1D (])
+        BYT %"...##..." ; original %"..####.."
+        BYT %"..##...." ; original %"....##.."
+        BYT %".##....." ; original %"....##.."
+        BYT %"########" ; original %"....##.."
+        BYT %".##....." ; original %"....##.."
+        BYT %"..##...." ; original %"....##.."
+        BYT %"...##..." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $1E (^)
+        BYT %"..####.." ; original %"........"
+        BYT %".##..##." ; original %"...##..."
+        BYT %".....##." ; original %"..####.."
+        BYT %"...###.." ; original %".######."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"...##..."
+; Screen code $1F (_)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"...#...."
+        BYT %"........" ; original %"..##...."
+        BYT %"........" ; original %".#######"
+        BYT %"........" ; original %".#######"
+        BYT %"........" ; original %"..##...."
+        BYT %"########" ; original %"...#...."
+        BYT %"........" ; original %"........"
+; Screen code $20 (space)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $21 (!)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $22 (")
+        BYT %"..#.#..." ; original %".##..##."
+        BYT %"..#.#..." ; original %".##..##."
+        BYT %"..#.#..." ; original %".##..##."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $23 (#)
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"########" ; original %"########"
+        BYT %".##..##." ; original %".##..##."
+        BYT %"########" ; original %"########"
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $24 ($)
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..####.." ; original %"..#####."
+        BYT %".#.#...." ; original %".##....."
+        BYT %"..###..." ; original %"..####.."
+        BYT %"...#.#.." ; original %".....##."
+        BYT %".####..." ; original %".#####.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $25 (%)
+        BYT %".##..#.." ; original %".##...#."
+        BYT %".##.#..." ; original %".##..##."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"..#.##.." ; original %".##..##."
+        BYT %".#..##.." ; original %".#...##."
+        BYT %"........" ; original %"........"
+; Screen code $26 (&)
+        BYT %"..##...." ; original %"..####.."
+        BYT %".#..#..." ; original %".##..##."
+        BYT %".#.#...." ; original %"..####.."
+        BYT %"..#....." ; original %"..###..."
+        BYT %".#.#.#.." ; original %".##..###"
+        BYT %".#..#..." ; original %".##..##."
+        BYT %"..##.#.." ; original %"..######"
+        BYT %"........" ; original %"........"
+; Screen code $27 (')
+        BYT %"...#...." ; original %".....##."
+        BYT %"...#...." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $28 (()
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"........" ; original %"........"
+; Screen code $29 ())
+        BYT %"..#....." ; original %"..##...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"........" ; original %"........"
+; Screen code $2A (*)
+        BYT %"........" ; original %"........"
+        BYT %".#.#.#.." ; original %".##..##."
+        BYT %"..###..." ; original %"..####.."
+        BYT %".#####.." ; original %"########"
+        BYT %"..###..." ; original %"..####.."
+        BYT %".#.#.#.." ; original %".##..##."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $2B (+)
+        BYT %"........" ; original %"........"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %".######." ; original %".######."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $2C (,)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"........" ; original %"..##...."
+; Screen code $2D (-)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $2E (.)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"..##...." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $2F (/)
+        BYT %".....#.." ; original %"........"
+        BYT %"....#..." ; original %"......##"
+        BYT %"....#..." ; original %".....##."
+        BYT %"...#...." ; original %"....##.."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %".#......" ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $30 (0)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".#....#." ; original %".##.###."
+        BYT %".#..#.#." ; original %".###.##."
+        BYT %".#.#..#." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $31 (1)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..###..." ; original %"...##..."
+        BYT %"...##..." ; original %"..###..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $32 (2)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".....##." ; original %".....##."
+        BYT %"...###.." ; original %"....##.."
+        BYT %"..##...." ; original %"..##...."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $33 (3)
+        BYT %".#####.." ; original %"..####.."
+        BYT %".....##." ; original %".##..##."
+        BYT %".....##." ; original %".....##."
+        BYT %"...####." ; original %"...###.."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".##..##."
+        BYT %".#####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $34 (4)
+        BYT %"....##.." ; original %".....##."
+        BYT %"...###.." ; original %"....###."
+        BYT %"..####.." ; original %"...####."
+        BYT %".##.##.." ; original %".##..##."
+        BYT %"########" ; original %".#######"
+        BYT %"....##.." ; original %".....##."
+        BYT %"....##.." ; original %".....##."
+        BYT %"........" ; original %"........"
+; Screen code $35 (5)
+        BYT %".######." ; original %".######."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".#####.."
+        BYT %".#####.." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $36 (6)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"######.." ; original %".#####.."
+        BYT %"##...##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $37 (7)
+        BYT %".######." ; original %".######."
+        BYT %".....##." ; original %".##..##."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $38 (8)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $39 (9)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##...##" ; original %".##..##."
+        BYT %"..######" ; original %"..#####."
+        BYT %"......##" ; original %".....##."
+        BYT %".....##." ; original %".##..##."
+        BYT %".#####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $3A (:)
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $3B (;)
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"........" ; original %"..##...."
+; Screen code $3C (<)
+        BYT %"....#..." ; original %"....###."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %".#......" ; original %".##....."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....###."
+        BYT %"........" ; original %"........"
+; Screen code $3D (=)
+        BYT %"........" ; original %"........"
+        BYT %".#####.." ; original %"........"
+        BYT %"........" ; original %".######."
+        BYT %".#####.." ; original %"........"
+        BYT %"........" ; original %".######."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $3E (>)
+        BYT %"..#....." ; original %".###...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....##.."
+        BYT %".....#.." ; original %".....##."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %".###...."
+        BYT %"........" ; original %"........"
+; Screen code $3F (?)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".....##." ; original %".....##."
+        BYT %"...###.." ; original %"....##.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $40 (@)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $41 (A)
+        BYT %"...##..." ; original %"....#..."
+        BYT %"..####.." ; original %"...###.."
+        BYT %".######." ; original %"..#####."
+        BYT %"########" ; original %".#######"
+        BYT %"########" ; original %".#######"
+        BYT %"..####.." ; original %"...###.."
+        BYT %".######." ; original %"..#####."
+        BYT %"........" ; original %"........"
+; Screen code $42 (B)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $43 (C)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $44 (D)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $45 (E)
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $46 (F)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $47 (G)
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+; Screen code $48 (H)
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+; Screen code $49 (I)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"###....." ; original %"###....."
+        BYT %"####...." ; original %"####...."
+        BYT %"..###..." ; original %"..###..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $4A (J)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...###.." ; original %"...###.."
+        BYT %"....####" ; original %"....####"
+        BYT %".....###" ; original %".....###"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $4B (K)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..###..." ; original %"..###..."
+        BYT %"####...." ; original %"####...."
+        BYT %"###....." ; original %"###....."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $4C (L)
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $4D (M)
+        BYT %"##......" ; original %"##......"
+        BYT %"###....." ; original %"###....."
+        BYT %".###...." ; original %".###...."
+        BYT %"..###..." ; original %"..###..."
+        BYT %"...###.." ; original %"...###.."
+        BYT %"....###." ; original %"....###."
+        BYT %".....###" ; original %".....###"
+        BYT %"......##" ; original %"......##"
+; Screen code $4E (N)
+        BYT %"......##" ; original %"......##"
+        BYT %".....###" ; original %".....###"
+        BYT %"....###." ; original %"....###."
+        BYT %"...###.." ; original %"...###.."
+        BYT %"..###..." ; original %"..###..."
+        BYT %".###...." ; original %".###...."
+        BYT %"###....." ; original %"###....."
+        BYT %"##......" ; original %"##......"
+; Screen code $4F (O)
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+; Screen code $50 (P)
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+; Screen code $51 (Q)
+        BYT %"........" ; original %"........"
+        BYT %"..####.." ; original %"..####.."
+        BYT %".######." ; original %".######."
+        BYT %".######." ; original %".######."
+        BYT %".######." ; original %".######."
+        BYT %"..####.." ; original %".######."
+        BYT %"........" ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $52 (R)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+; Screen code $53 (S)
+        BYT %"........" ; original %"..##.##."
+        BYT %".##.##.." ; original %".#######"
+        BYT %"########" ; original %".#######"
+        BYT %"########" ; original %".#######"
+        BYT %".######." ; original %"..#####."
+        BYT %"..####.." ; original %"...###.."
+        BYT %"...##..." ; original %"....#..."
+        BYT %"........" ; original %"........"
+; Screen code $54 (T)
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+; Screen code $55 (U)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".....###" ; original %".....###"
+        BYT %"....####" ; original %"....####"
+        BYT %"...###.." ; original %"...###.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $56 (V)
+        BYT %"##....##" ; original %"##....##"
+        BYT %"###..###" ; original %"###..###"
+        BYT %".######." ; original %".######."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".######." ; original %".######."
+        BYT %"###..###" ; original %"###..###"
+        BYT %"........" ; original %"##....##"
+; Screen code $57 (W)
+        BYT %"........" ; original %"........"
+        BYT %"..####.." ; original %"..####.."
+        BYT %".######." ; original %".######."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".######." ; original %".######."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $58 (X)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $59 (Y)
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+; Screen code $5A (Z)
+        BYT %"...##..." ; original %"....#..."
+        BYT %"..####.." ; original %"...###.."
+        BYT %".######." ; original %"..#####."
+        BYT %"########" ; original %".#######"
+        BYT %".######." ; original %"..#####."
+        BYT %"..####.." ; original %"...###.."
+        BYT %"...##..." ; original %"....#..."
+        BYT %"........" ; original %"........"
+; Screen code $5B ([)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $5C (\)
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+; Screen code $5D (])
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $5E (^)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"......##" ; original %"......##"
+        BYT %"..#####." ; original %"..#####."
+        BYT %".###.##." ; original %".###.##."
+        BYT %"..##.##." ; original %"..##.##."
+        BYT %"..##.##." ; original %"..##.##."
+        BYT %"........" ; original %"........"
+; Screen code $5F (_)
+        BYT %"########" ; original %"########"
+        BYT %".#######" ; original %".#######"
+        BYT %"..######" ; original %"..######"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"....####" ; original %"....####"
+        BYT %".....###" ; original %".....###"
+        BYT %"......##" ; original %"......##"
+        BYT %".......#" ; original %".......#"
+; Screen code $60 (`)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $61 (a)
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+; Screen code $62 (b)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $63 (c)
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $64 (d)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+; Screen code $65 (e)
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+; Screen code $66 (f)
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+; Screen code $67 (g)
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+; Screen code $68 (h)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+; Screen code $69 (i)
+        BYT %"########" ; original %"########"
+        BYT %"#######." ; original %"#######."
+        BYT %"######.." ; original %"######.."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"####...." ; original %"####...."
+        BYT %"###....." ; original %"###....."
+        BYT %"##......" ; original %"##......"
+        BYT %"#......." ; original %"#......."
+; Screen code $6A (j)
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+; Screen code $6B (k)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $6C (l)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+; Screen code $6D (m)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $6E (n)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"#####..." ; original %"#####..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $6F (o)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $70 (p)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $71 (q)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $72 (r)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $73 (s)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $74 (t)
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+; Screen code $75 (u)
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+; Screen code $76 (v)
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+; Screen code $77 (w)
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $78 (x)
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $79 (y)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $7A (z)
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $7B ({)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+; Screen code $7C (|)
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $7D (})
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $7E (~)
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $7F (blank in free ROM)
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+; Screen code $80 (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##.###." ; original %".##.###."
+        BYT %".##.#.#." ; original %".##.###."
+        BYT %".##.###." ; original %".##....."
+        BYT %".##....." ; original %".##...#."
+        BYT %"..#####." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $81 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"..####.." ; original %"..####.."
+        BYT %".....##." ; original %".....##."
+        BYT %"..#####." ; original %"..#####."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..#####." ; original %"..#####."
+        BYT %"........" ; original %"........"
+; Screen code $82 (blank in free ROM)
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %"........" ; original %"........"
+; Screen code $83 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##..##."
+        BYT %"..#####." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $84 (blank in free ROM)
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %"..#####." ; original %"..#####."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..#####." ; original %"..#####."
+        BYT %"........" ; original %"........"
+; Screen code $85 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".######." ; original %".######."
+        BYT %".##....." ; original %".##....."
+        BYT %"..#####." ; original %"..#####."
+        BYT %"........" ; original %"........"
+; Screen code $86 (blank in free ROM)
+        BYT %"...####." ; original %"...###.."
+        BYT %"..##...." ; original %"..##.##."
+        BYT %"..##...." ; original %"..##...."
+        BYT %".#####.." ; original %".####..."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"........" ; original %"........"
+; Screen code $87 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"..#####." ; original %"........"
+        BYT %".##..##." ; original %"..#####."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..#####." ; original %".##..##."
+        BYT %".....##." ; original %"..#####."
+        BYT %".#####.." ; original %".....##."
+        BYT %"........" ; original %".#####.."
+; Screen code $88 (blank in free ROM)
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $89 (blank in free ROM)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"..###..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..####.." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $8A (blank in free ROM)
+        BYT %"....##.." ; original %".....##."
+        BYT %"........" ; original %"........"
+        BYT %"...###.." ; original %".....##."
+        BYT %"....##.." ; original %".....##."
+        BYT %"....##.." ; original %".....##."
+        BYT %".##.##.." ; original %".....##."
+        BYT %"..###..." ; original %".##..##."
+        BYT %"........" ; original %"..####.."
+; Screen code $8B (blank in free ROM)
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".####..." ; original %".####..."
+        BYT %".##.##.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $8C (blank in free ROM)
+        BYT %"..###..." ; original %"..###..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $8D (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".##.##.." ; original %".##.#.##"
+        BYT %"########" ; original %".#######"
+        BYT %"##.##.##" ; original %".#######"
+        BYT %"##.##.##" ; original %".##...##"
+        BYT %"##.##.##" ; original %".##...##"
+        BYT %"........" ; original %"........"
+; Screen code $8E (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $8F (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $90 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %".#####.." ; original %"........"
+        BYT %".##..##." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".#####.." ; original %".##..##."
+        BYT %".##....." ; original %".#####.."
+        BYT %".##....." ; original %".##....."
+        BYT %"........" ; original %".##....."
+; Screen code $91 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"..#####." ; original %"........"
+        BYT %".##..##." ; original %"..#####."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..#####." ; original %".##..##."
+        BYT %".....##." ; original %"..#####."
+        BYT %".....##." ; original %".....##."
+        BYT %"........" ; original %".....##."
+; Screen code $92 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".##.###." ; original %".#####.."
+        BYT %".###...." ; original %".##..##."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $93 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##....."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".....##." ; original %".....##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %"........" ; original %"........"
+; Screen code $94 (blank in free ROM)
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %".#####.." ; original %"######.."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##...." ; original %"..##...."
+        BYT %"..##.##." ; original %"..##.##."
+        BYT %"...###.." ; original %"...###.."
+        BYT %"........" ; original %"........"
+; Screen code $95 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..#####." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $96 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $97 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##.##.##" ; original %".##.#.##"
+        BYT %"##.##.##" ; original %".#######"
+        BYT %"########" ; original %"..##.##."
+        BYT %".##..##." ; original %"..#...#."
+        BYT %"........" ; original %"........"
+; Screen code $98 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $99 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %".##..##." ; original %"........"
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..#####." ; original %".##..##."
+        BYT %".....##." ; original %".##..##."
+        BYT %".##..##." ; original %"..#####."
+        BYT %"..####.." ; original %".....##."
+        BYT %"........" ; original %".#####.."
+; Screen code $9A (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".######." ; original %".######."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..##...." ; original %"..##...."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $9B (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %"..##...."
+        BYT %".##....." ; original %"..##...."
+        BYT %".#####.." ; original %"..##...."
+        BYT %".##....." ; original %"..##...."
+        BYT %".##..##." ; original %"..##...."
+        BYT %".######." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $9C (blank in free ROM)
+        BYT %"...##..." ; original %"....##.."
+        BYT %"..####.." ; original %"...#..#."
+        BYT %".##..##." ; original %"..##...."
+        BYT %"...##..." ; original %".#####.."
+        BYT %"...##..." ; original %"..##...."
+        BYT %"...##..." ; original %".##...#."
+        BYT %"...##..." ; original %"######.."
+        BYT %"........" ; original %"........"
+; Screen code $9D (blank in free ROM)
+        BYT %"...##..." ; original %"..####.."
+        BYT %"..##...." ; original %"....##.."
+        BYT %".##....." ; original %"....##.."
+        BYT %"########" ; original %"....##.."
+        BYT %".##....." ; original %"....##.."
+        BYT %"..##...." ; original %"....##.."
+        BYT %"...##..." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $9E (blank in free ROM)
+        BYT %"...##..." ; original %"........"
+        BYT %"..####.." ; original %"...##..."
+        BYT %".##..##." ; original %"..####.."
+        BYT %"........" ; original %".######."
+        BYT %"........" ; original %"...##..."
+        BYT %"........" ; original %"...##..."
+        BYT %"........" ; original %"...##..."
+        BYT %"........" ; original %"...##..."
+; Screen code $9F (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"...#...."
+        BYT %"........" ; original %"..##...."
+        BYT %"........" ; original %".#######"
+        BYT %"........" ; original %".#######"
+        BYT %"........" ; original %"..##...."
+        BYT %"########" ; original %"...#...."
+        BYT %"........" ; original %"........"
+; Screen code $A0 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $A1 (blank in free ROM)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $A2 (blank in free ROM)
+        BYT %"..#.#..." ; original %".##..##."
+        BYT %"..#.#..." ; original %".##..##."
+        BYT %"..#.#..." ; original %".##..##."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $A3 (blank in free ROM)
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"########" ; original %"########"
+        BYT %".##..##." ; original %".##..##."
+        BYT %"########" ; original %"########"
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $A4 (blank in free ROM)
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..####.." ; original %"..#####."
+        BYT %".#.#...." ; original %".##....."
+        BYT %"..###..." ; original %"..####.."
+        BYT %"...#.#.." ; original %".....##."
+        BYT %".####..." ; original %".#####.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $A5 (blank in free ROM)
+        BYT %".##..#.." ; original %".##...#."
+        BYT %".##.#..." ; original %".##..##."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"..#.##.." ; original %".##..##."
+        BYT %".#..##.." ; original %".#...##."
+        BYT %"........" ; original %"........"
+; Screen code $A6 (blank in free ROM)
+        BYT %"..##...." ; original %"..####.."
+        BYT %".#..#..." ; original %".##..##."
+        BYT %".#.#...." ; original %"..####.."
+        BYT %"..#....." ; original %"..###..."
+        BYT %".#.#.#.." ; original %".##..###"
+        BYT %".#..#..." ; original %".##..##."
+        BYT %"..##.#.." ; original %"..######"
+        BYT %"........" ; original %"........"
+; Screen code $A7 (blank in free ROM)
+        BYT %"...#...." ; original %".....##."
+        BYT %"...#...." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $A8 (blank in free ROM)
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"........" ; original %"........"
+; Screen code $A9 (blank in free ROM)
+        BYT %"..#....." ; original %"..##...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"........" ; original %"........"
+; Screen code $AA (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %".#.#.#.." ; original %".##..##."
+        BYT %"..###..." ; original %"..####.."
+        BYT %".#####.." ; original %"########"
+        BYT %"..###..." ; original %"..####.."
+        BYT %".#.#.#.." ; original %".##..##."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $AB (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %".######." ; original %".######."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $AC (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"........" ; original %"..##...."
+; Screen code $AD (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $AE (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"..##...." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $AF (blank in free ROM)
+        BYT %".....#.." ; original %"........"
+        BYT %"....#..." ; original %"......##"
+        BYT %"....#..." ; original %".....##."
+        BYT %"...#...." ; original %"....##.."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %".#......" ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $B0 (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##.###."
+        BYT %"##..#.##" ; original %".###.##."
+        BYT %"##.#..##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $B1 (blank in free ROM)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..###..." ; original %"...##..."
+        BYT %"...##..." ; original %"..###..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $B2 (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".....##." ; original %".....##."
+        BYT %"...###.." ; original %"....##.."
+        BYT %"..##...." ; original %"..##...."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $B3 (blank in free ROM)
+        BYT %".#####.." ; original %"..####.."
+        BYT %".....##." ; original %".##..##."
+        BYT %".....##." ; original %".....##."
+        BYT %"...####." ; original %"...###.."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".##..##."
+        BYT %".#####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $B4 (blank in free ROM)
+        BYT %"....##.." ; original %".....##."
+        BYT %"...###.." ; original %"....###."
+        BYT %"..####.." ; original %"...####."
+        BYT %".##.##.." ; original %".##..##."
+        BYT %"########" ; original %".#######"
+        BYT %"....##.." ; original %".....##."
+        BYT %"....##.." ; original %".....##."
+        BYT %"........" ; original %"........"
+; Screen code $B5 (blank in free ROM)
+        BYT %".######." ; original %".######."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".#####.."
+        BYT %".#####.." ; original %".....##."
+        BYT %".....##." ; original %".....##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $B6 (blank in free ROM)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"######.." ; original %".#####.."
+        BYT %"##...##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $B7 (blank in free ROM)
+        BYT %".######." ; original %".######."
+        BYT %".....##." ; original %".##..##."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"..##...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $B8 (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $B9 (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##...##" ; original %".##..##."
+        BYT %"..######" ; original %"..#####."
+        BYT %"......##" ; original %".....##."
+        BYT %".....##." ; original %".##..##."
+        BYT %".#####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $BA (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $BB (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"........" ; original %"..##...."
+; Screen code $BC (blank in free ROM)
+        BYT %"....#..." ; original %"....###."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %"..##...."
+        BYT %".#......" ; original %".##....."
+        BYT %"..#....." ; original %"..##...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....###."
+        BYT %"........" ; original %"........"
+; Screen code $BD (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %".#####.." ; original %"........"
+        BYT %"........" ; original %".######."
+        BYT %".#####.." ; original %"........"
+        BYT %"........" ; original %".######."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $BE (blank in free ROM)
+        BYT %"..#....." ; original %".###...."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....#..." ; original %"....##.."
+        BYT %".....#.." ; original %".....##."
+        BYT %"....#..." ; original %"....##.."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"..#....." ; original %".###...."
+        BYT %"........" ; original %"........"
+; Screen code $BF (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".....##." ; original %".....##."
+        BYT %"...###.." ; original %"....##.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $C0 (blank in free ROM)
+        BYT %"..####.." ; original %"........"
+        BYT %".##..##." ; original %"........"
+        BYT %".##.###." ; original %"........"
+        BYT %".##.#.#." ; original %"########"
+        BYT %".##.###." ; original %"########"
+        BYT %".##....." ; original %"........"
+        BYT %"..#####." ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $C1 (blank in free ROM)
+        BYT %"..####.." ; original %"...##..."
+        BYT %".##..##." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".######." ; original %".######."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $C2 (blank in free ROM)
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %"........" ; original %"........"
+; Screen code $C3 (blank in free ROM)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"##......" ; original %".##....."
+        BYT %"##......" ; original %".##....."
+        BYT %".##....." ; original %".##..##."
+        BYT %"..#####." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $C4 (blank in free ROM)
+        BYT %".#####.." ; original %".####..."
+        BYT %".##..##." ; original %".##.##.."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##...#." ; original %".##..##."
+        BYT %".##..##." ; original %".##.##.."
+        BYT %".#####.." ; original %".####..."
+        BYT %"........" ; original %"........"
+; Screen code $C5 (blank in free ROM)
+        BYT %".######." ; original %".######."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".#####.." ; original %".####..."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $C6 (blank in free ROM)
+        BYT %".######." ; original %".######."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".#####.." ; original %".####..."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $C7 (blank in free ROM)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"##..###." ; original %".##.###."
+        BYT %"##...##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $C8 (blank in free ROM)
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".######." ; original %".######."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $C9 (blank in free ROM)
+        BYT %".######." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %".######." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $CA (blank in free ROM)
+        BYT %"..#####." ; original %"...####."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"....##.." ; original %"....##.."
+        BYT %".##.##.." ; original %"....##.."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %"..###..." ; original %"..###..."
+        BYT %"........" ; original %"........"
+; Screen code $CB (blank in free ROM)
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".####..." ; original %".####..."
+        BYT %".###...." ; original %".###...."
+        BYT %".####..." ; original %".####..."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $CC (blank in free ROM)
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $CD (blank in free ROM)
+        BYT %"##....##" ; original %".##...##"
+        BYT %"###..###" ; original %".###.###"
+        BYT %"########" ; original %".#######"
+        BYT %"##.##.##" ; original %".##.#.##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"........" ; original %"........"
+; Screen code $CE (blank in free ROM)
+        BYT %"##....##" ; original %".##..##."
+        BYT %"###...##" ; original %".###.##."
+        BYT %"####..##" ; original %".######."
+        BYT %"##.##.##" ; original %".######."
+        BYT %"##..####" ; original %".##.###."
+        BYT %"##...###" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $CF (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $D0 (blank in free ROM)
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %".##....." ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $D1 (blank in free ROM)
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##..#.##" ; original %".##..##."
+        BYT %".##..##." ; original %"..####.."
+        BYT %"..#####." ; original %"....###."
+        BYT %"........" ; original %"........"
+; Screen code $D2 (blank in free ROM)
+        BYT %".#####.." ; original %".#####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".#####.." ; original %".#####.."
+        BYT %".####..." ; original %".####..."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $D3 (blank in free ROM)
+        BYT %"..#####." ; original %"..####.."
+        BYT %".##....." ; original %".##..##."
+        BYT %"##......" ; original %".##....."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".....##." ; original %".....##."
+        BYT %".....##." ; original %".##..##."
+        BYT %".#####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $D4 (blank in free ROM)
+        BYT %"########" ; original %".######."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $D5 (blank in free ROM)
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"........" ; original %"........"
+; Screen code $D6 (blank in free ROM)
+        BYT %"##....##" ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $D7 (blank in free ROM)
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"##.##.##" ; original %".##.#.##"
+        BYT %"########" ; original %".#######"
+        BYT %"###..###" ; original %".###.###"
+        BYT %"##....##" ; original %".##...##"
+        BYT %"........" ; original %"........"
+; Screen code $D8 (blank in free ROM)
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..####.." ; original %"..####.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##....##" ; original %".##..##."
+        BYT %"........" ; original %"........"
+; Screen code $D9 (blank in free ROM)
+        BYT %"##....##" ; original %".##..##."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..####.." ; original %".##..##."
+        BYT %"...##..." ; original %"..####.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"........" ; original %"........"
+; Screen code $DA (blank in free ROM)
+        BYT %".######." ; original %".######."
+        BYT %".....##." ; original %".....##."
+        BYT %"....##.." ; original %"....##.."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"..##...." ; original %"..##...."
+        BYT %".##....." ; original %".##....."
+        BYT %".######." ; original %".######."
+        BYT %"........" ; original %"........"
+; Screen code $DB (blank in free ROM)
+        BYT %"..###..." ; original %"...##..."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"..#....." ; original %"...##..."
+        BYT %"..#....." ; original %"########"
+        BYT %"..#....." ; original %"########"
+        BYT %"..#....." ; original %"...##..."
+        BYT %"..###..." ; original %"...##..."
+        BYT %"........" ; original %"...##..."
+; Screen code $DC (blank in free ROM)
+        BYT %".#......" ; original %"##......"
+        BYT %"..#....." ; original %"##......"
+        BYT %"..#....." ; original %"..##...."
+        BYT %"...#...." ; original %"..##...."
+        BYT %"....#..." ; original %"##......"
+        BYT %"....#..." ; original %"##......"
+        BYT %".....#.." ; original %"..##...."
+        BYT %"........" ; original %"..##...."
+; Screen code $DD (blank in free ROM)
+        BYT %"..###..." ; original %"...##..."
+        BYT %"....#..." ; original %"...##..."
+        BYT %"....#..." ; original %"...##..."
+        BYT %"....#..." ; original %"...##..."
+        BYT %"....#..." ; original %"...##..."
+        BYT %"....#..." ; original %"...##..."
+        BYT %"..###..." ; original %"...##..."
+        BYT %"........" ; original %"...##..."
+; Screen code $DE (blank in free ROM)
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+; Screen code $DF (blank in free ROM)
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"#..##..#" ; original %"#..##..#"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %".##..##." ; original %".##..##."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"#..##..#" ; original %"#..##..#"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %".##..##." ; original %".##..##."
+; Screen code $E0 (blank in free ROM)
+        BYT %"..#....." ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"....#..." ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $E1 (blank in free ROM)
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+; Screen code $E2 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $E3 (blank in free ROM)
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $E4 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+; Screen code $E5 (blank in free ROM)
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+; Screen code $E6 (blank in free ROM)
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+; Screen code $E7 (blank in free ROM)
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+; Screen code $E8 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %"..##..##" ; original %"..##..##"
+; Screen code $E9 (blank in free ROM)
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"#..##..#" ; original %"#..##..#"
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %".##..##." ; original %".##..##."
+        BYT %"##..##.." ; original %"##..##.."
+        BYT %"#..##..#" ; original %"#..##..#"
+        BYT %"..##..##" ; original %"..##..##"
+        BYT %".##..##." ; original %".##..##."
+; Screen code $EA (blank in free ROM)
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+        BYT %"......##" ; original %"......##"
+; Screen code $EB (blank in free ROM)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $EC (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+; Screen code $ED (blank in free ROM)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $EE (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"#####..." ; original %"#####..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $EF (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $F0 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...#####" ; original %"...#####"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $F1 (blank in free ROM)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $F2 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $F3 (blank in free ROM)
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"#####..." ; original %"#####..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+        BYT %"...##..." ; original %"...##..."
+; Screen code $F4 (blank in free ROM)
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+        BYT %"##......" ; original %"##......"
+; Screen code $F5 (blank in free ROM)
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+        BYT %"###....." ; original %"###....."
+; Screen code $F6 (blank in free ROM)
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+        BYT %".....###" ; original %".....###"
+; Screen code $F7 (blank in free ROM)
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $F8 (blank in free ROM)
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $F9 (blank in free ROM)
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+        BYT %"########" ; original %"########"
+; Screen code $FA (blank in free ROM)
+        BYT %".......#" ; original %".......#"
+        BYT %"......##" ; original %"......##"
+        BYT %".....##." ; original %".....##."
+        BYT %".##.##.." ; original %".##.##.."
+        BYT %".####..." ; original %".####..."
+        BYT %".###...." ; original %".###...."
+        BYT %".##....." ; original %".##....."
+        BYT %"........" ; original %"........"
+; Screen code $FB (blank in free ROM)
+        BYT %"....##.." ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %".##....." ; original %"........"
+        BYT %"...#...." ; original %"####...."
+        BYT %"...#...." ; original %"####...."
+        BYT %"....##.." ; original %"####...."
+        BYT %"........" ; original %"####...."
+; Screen code $FC (blank in free ROM)
+        BYT %"...#...." ; original %"....####"
+        BYT %"...#...." ; original %"....####"
+        BYT %"...#...." ; original %"....####"
+        BYT %"...#...." ; original %"....####"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"...#...." ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $FD (blank in free ROM)
+        BYT %".##....." ; original %"...##..."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"...#...." ; original %"...##..."
+        BYT %"....##.." ; original %"#####..."
+        BYT %"...#...." ; original %"#####..."
+        BYT %"...#...." ; original %"........"
+        BYT %".##....." ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $FE (blank in free ROM)
+        BYT %"........" ; original %"####...."
+        BYT %"........" ; original %"####...."
+        BYT %"..#..#.." ; original %"####...."
+        BYT %".#.##..." ; original %"####...."
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+        BYT %"........" ; original %"........"
+; Screen code $FF (blank in free ROM)
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"####...." ; original %"####...."
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
+        BYT %"....####" ; original %"....####"
 irq     RTI
         ORG $FFFA
         ADR irq,reset,irq

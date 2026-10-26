@@ -76,7 +76,7 @@ clearmask EQU $6600             ; one clear-bit mask for each pixel position
 start   SEI                     ; demo does not call the ROM IRQ handler
         JSR maketables
         LDX #$00
-matrix  LDA #$07                ; bright white luminance
+.matrix  LDA #$07                ; bright white luminance
         STA $0800,X
         STA $0900,X
         STA $0a00,X
@@ -87,7 +87,7 @@ matrix  LDA #$07                ; bright white luminance
         STA $0e00,X
         STA $0f00,X
         INX
-        BNE matrix
+        BNE .matrix
 
         ; Fill all 8000 bitmap bytes with white pixels.
         LDA #$00
@@ -97,17 +97,17 @@ matrix  LDA #$07                ; bright white luminance
         LDX #31
         LDY #$00
         LDA #$ff
-fillpg  STA (ptr),Y
+.fillpg  STA (ptr),Y
         INY
-        BNE fillpg
+        BNE .fillpg
         INC ptr+1
         DEX
-        BNE fillpg
-filltail
+        BNE .fillpg
+.filltail
         STA (ptr),Y
         INY
         CPY #64
-        BNE filltail
+        BNE .filltail
 
         LDA #$00
         STA $ff15               ; black picture background
@@ -125,14 +125,14 @@ filltail
         STA cilo
         LDA #$ff
         STA cihi
-rowloop LDA #$00
+.rowloop LDA #$00
         STA xlo
         STA xhi
         LDA #$a0               ; real start -352 in signed Q7
         STA crlo
         LDA #$fe
         STA crhi
-colloop
+.colloop
         LDA #$00
         STA zrlo
         STA zrhi
@@ -143,7 +143,7 @@ colloop
 
 ; Check |z| squared before each update. The final pass checks z20 after
 ; exactly twenty z <- z*z+c updates.
-iterate LDA zrlo
+.iterate LDA zrlo
         STA arglo
         LDA zrhi
         STA arghi
@@ -175,15 +175,15 @@ iterate LDA zrlo
         LDA r2top
         ADC i2top
         STA sumtop
-        BEQ bounded             ; 4.0 in raw Q14 is $010000
-        JMP nextpoint
-bounded LDA steps
-        BNE updatez
+        BEQ .bounded             ; 4.0 in raw Q14 is $010000
+        JMP .nextpoint
+.bounded LDA steps
+        BNE .updatez
         JSR plotblack           ; bounded after 20 updates: black
-        JMP nextpoint
+        JMP .nextpoint
 
 ; Next real component: (zr*zr - zi*zi)/128 + cr.
-updatez SEC
+.updatez SEC
         LDA r2lo
         SBC i2lo
         STA termlo
@@ -198,9 +198,9 @@ updatez SEC
         LDA crhi
         STA caddhi
         JSR scaleadd
-        BCC realok
-        JMP nextpoint
-realok  LDA termlo
+        BCC .realok
+        JMP .nextpoint
+.realok  LDA termlo
         STA nextlo
         LDA termhi
         STA nexthi
@@ -229,9 +229,9 @@ realok  LDA termlo
         LDA cihi
         STA caddhi
         JSR scaleadd
-        BCC imagok
-        JMP nextpoint
-imagok  LDA termlo
+        BCC .imagok
+        JMP .nextpoint
+.imagok  LDA termlo
         STA zilo
         LDA termhi
         STA zihi
@@ -240,49 +240,49 @@ imagok  LDA termlo
         LDA nexthi
         STA zrhi
         DEC steps
-        JMP iterate
+        JMP .iterate
 
-nextpoint
+.nextpoint
         INC xlo
-        BNE xready
+        BNE .xready
         INC xhi
-xready  LDA xhi
+.xready  LDA xhi
         CMP #$01
-        BNE morex
+        BNE .morex
         LDA xlo
         CMP #$40                ; $0140 = 320 columns
-        BEQ nextrow
-morex   LDA xlo
+        BEQ .nextrow
+.morex   LDA xlo
         AND #$01                ; new odd columns advance by 2, even by 1
-        BEQ addone
+        BEQ .addone
         LDA #$02
-        JMP addreal
-addone  LDA #$01
-addreal CLC
+        JMP .addreal
+.addone  LDA #$01
+.addreal CLC
         ADC crlo
         STA crlo
         LDA crhi
         ADC #$00
         STA crhi
-        JMP colloop
-nextrow INC ypos
+        JMP .colloop
+.nextrow INC ypos
         LDA ypos
         CMP #100
-        BEQ finished
+        BEQ .finished
         AND #$01                ; same 2,1 coordinate steps vertically
-        BEQ imagone
+        BEQ .imagone
         LDA #$02
-        JMP addimag
-imagone LDA #$01
-addimag CLC
+        JMP .addimag
+.imagone LDA #$01
+.addimag CLC
         ADC cilo
         STA cilo
         LDA cihi
         ADC #$00
         STA cihi
-        JMP rowloop
-finished
-        JMP finished            ; leave the completed picture visible
+        JMP .rowloop
+.finished
+        JMP .finished            ; leave the completed picture visible
 
 ; Generate n^2 for n=0..362 from (n+1)^2 = n^2 + (2*n+1). The third
 ; square byte is implicit: zero on the first page and one on the second.
@@ -296,28 +296,28 @@ maketables
         LDA #$01
         STA oddlo
         LDX #$00
-genlow  LDA sqvlo
+.genlow  LDA sqvlo
         STA sqlo0,X
         LDA sqvhi
         STA sqhi0,X
-        JSR nextsquare
+        JSR .nextsquare
         INX
-        BNE genlow
+        BNE .genlow
         LDX #$00
-genhigh LDA sqvlo
+.genhigh LDA sqvlo
         STA sqlo1,X
         LDA sqvhi
         STA sqhi1,X
-        JSR nextsquare
+        JSR .nextsquare
         INX
         CPX #107                ; 256..362 inclusive
-        BNE genhigh
+        BNE .genhigh
 
         LDA #$00
         STA rowvlo
         STA rowvhi
         LDX #$00
-genrow  LDA rowvlo
+.genrow  LDA rowvlo
         STA rowlo,X
         LDA rowvhi
         STA rowhi,X
@@ -330,12 +330,12 @@ genrow  LDA rowvlo
         STA rowvhi
         INX
         CPX #25
-        BNE genrow
+        BNE .genrow
 
         LDA #$80
         STA sqvlo
         LDX #$00
-genmask LDA sqvlo
+.genmask LDA sqvlo
         EOR #$ff
         STA clearmask,X
         LDA sqvlo
@@ -343,11 +343,11 @@ genmask LDA sqvlo
         STA sqvlo
         INX
         CPX #8
-        BNE genmask
+        BNE .genmask
         RTS
 
 ; Advance the running square and the odd difference without changing X.
-nextsquare
+.nextsquare
         CLC
         LDA sqvlo
         ADC oddlo
@@ -371,7 +371,7 @@ nextsquare
 ; The bounded radius guarantees |arg| <= 362, so a two-page square table
 ; holds every possible lookup. Its top byte is 0 for 0..255 and 1 for 256..
 square  LDA arghi
-        BPL sqpositive
+        BPL .sqpositive
         LDA #$00
         SEC
         SBC arglo
@@ -379,16 +379,16 @@ square  LDA arghi
         LDA #$00
         SBC arghi
         STA indexhi
-        JMP sqlookup
-sqpositive
+        JMP .sqlookup
+.sqpositive
         LDA arglo
         STA indexlo
         LDA arghi
         STA indexhi
-sqlookup
+.sqlookup
         LDY indexlo
         LDA indexhi
-        BEQ sqpage0
+        BEQ .sqpage0
         LDA sqlo1,Y
         STA sqloout
         LDA sqhi1,Y
@@ -396,7 +396,7 @@ sqlookup
         LDA #$01
         STA sqtop
         RTS
-sqpage0 LDA sqlo0,Y
+.sqpage0 LDA sqlo0,Y
         STA sqloout
         LDA sqhi0,Y
         STA sqhiout
@@ -408,13 +408,13 @@ sqpage0 LDA sqlo0,Y
 ; Carry clear means the Q7 result fits -256..255; carry set means escape.
 scaleadd
         LDX #7
-ashift  LDA termtop
+.ashift  LDA termtop
         CMP #$80                ; put sign into carry for arithmetic ROR
         ROR termtop
         ROR termhi
         ROR termlo
         DEX
-        BNE ashift
+        BNE .ashift
         CLC
         LDA termlo
         ADC caddlo
@@ -422,12 +422,12 @@ ashift  LDA termtop
         LDA termhi
         ADC caddhi
         STA termhi
-        BEQ scaledok
+        BEQ .scaledok
         CMP #$ff
-        BEQ scaledok
+        BEQ .scaledok
         SEC
         RTS
-scaledok
+.scaledok
         CLC
         RTS
 
