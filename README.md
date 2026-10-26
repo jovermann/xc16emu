@@ -16,6 +16,7 @@ Features
 - Loading and starting PRG files before or after BASIC boot, and restoring 64 kB frozen images.
 - Headless 40×25 text and 320×200 graphics capture for automated testing.
 - macOS window with adjustable zoom and borders, status display, reset, Fast Mode, and joystick key help.
+- Edit → Paste (⌘V) types clipboard BASIC lines through the emulated keyboard and submits them with Return.
 - Persistent desktop settings in `~/.xc16emu.toml`.
 
 
@@ -31,12 +32,17 @@ cargo build --release
 Run on macOS
 ------------
 
-The ROM images are not included in this repository. Put `basrom.dat` and
-`sysrom.dat` in a directory, then run the built executable directly:
+This repository includes independently written ROM images in
+`free_roms/`. They support a small BASIC subset with numbered programs,
+`LIST`, and `RUN`, described in
+[free_roms/README.md](free_roms/README.md). Run the built executable directly:
 
 ```sh
-./target/release/xc16emu --roms /path/to/roms
+./target/release/xc16emu --roms free_roms
 ```
+
+You can also supply a directory containing other compatible `basrom.dat` and
+`sysrom.dat` images with `--roms /path/to/roms`.
 
 
 Loading programs
@@ -62,7 +68,7 @@ For BASIC's `DLOAD` and `DSAVE`, `--drive DIR` exposes a host directory as
 device 8. Filenames are confined to that directory. `--dry-run` acknowledges
 drive saves without writing a file. `--verbose` reports drive file opens.
 
-`--frozen-image FILE` accepts the old emulator's 64 KiB frozen-image format.
+`--frozen-image FILE` accepts the legacy 64 KiB frozen-image format.
 
 Rotating cube demo
 ------------------

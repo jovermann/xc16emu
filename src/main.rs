@@ -5,15 +5,20 @@
 mod audio_output;
 
 use audio_output::AudioOutput;
-use minifb::{Key, MenuItemHandle, MouseButton, MouseMode, Scale, Window, WindowOptions};
+use minifb::{
+    InputCallback, Key, MenuItemHandle, MouseButton, MouseMode, Scale, Window, WindowOptions,
+};
 #[cfg(not(target_os = "macos"))]
 use minifb::{Menu, MenuHandle};
 use std::{
+    cell::RefCell,
+    collections::VecDeque,
     env, fs,
     path::PathBuf,
+    rc::Rc,
     time::{Duration, Instant},
 };
-use xc16emu::{Machine, PAL_TED_TICKS_PER_SECOND};
+use xc16emu::{matrix_for_char, Machine, PAL_TED_TICKS_PER_SECOND};
 
 /// One-pixel outline, one-pixel inset, seven-pixel font, and bottom inset.
 const STATUS_HEIGHT: usize = 11;
@@ -28,6 +33,126 @@ const ZOOM_2_ID: usize = 8;
 const ZOOM_4_ID: usize = 9;
 const SOUND_ID: usize = 10;
 const JOYSTICK_HELP_ID: usize = 11;
+const PASTE_ID: usize = 12;
+const DELETE_LINE_ID: usize = 13;
+
+/// Capture layout-translated text from the host window, including punctuation.
+struct HostText(Rc<RefCell<VecDeque<char>>>);
+
+impl InputCallback for HostText {
+    /// Queue one Unicode character delivered by the host keyboard layout.
+    /// Arguments: uni_char is a Unicode scalar value. Returns: nothing.
+    fn add_char(&mut self, uni_char: u32) {
+        // AppKit sends arrow and other function keys as private-use Unicode
+        // scalars as well as key events. The key-event path handles those.
+        if (0xf700..=0xf8ff).contains(&uni_char) {
+            return;
+        }
+        if let Some(character) = char::from_u32(uni_char) {
+            self.0.borrow_mut().push_back(character);
+        }
+    }
+}
+
+/// Characters waiting to be delivered through the C16 keyboard matrix.
+#[derive(Default)]
+struct PasteQueue {
+    pending: VecDeque<(u8, bool)>,
+    active: Option<(u8, bool)>,
+    phase: u8,
+}
+
+impl PasteQueue {
+    /// Queue one live key, retaining at most five pending copies at the tail.
+    /// Arguments: key is a matrix index and Shift state. Returns: nothing.
+    fn append_live_key(&mut self, key: (u8, bool)) {
+        let repeated = self
+            .pending
+            .iter()
+            .rev()
+            .take_while(|&&queued| queued == key)
+            .take(5)
+            .count();
+        if repeated < 5 {
+            self.pending.push_back(key);
+        }
+    }
+
+    /// Queue one nonprintable C16 key such as a cursor movement.
+    /// Arguments: index is the keyboard-matrix position. Returns: nothing.
+    fn append_key(&mut self, index: u8) {
+        self.pending.push_back((index, false));
+    }
+
+    /// Queue live layout text while limiting a run of identical host keys.
+    /// Arguments: character is host text. Returns: a mapping error or success.
+    fn append_live_char(&mut self, character: char) -> Result<(), String> {
+        let key = matrix_for_char(character)
+            .ok_or_else(|| format!("cannot type character {character:?} on the C16 keyboard"))?;
+        self.append_live_key(key);
+        Ok(())
+    }
+
+    /// Parse BASIC source from the clipboard and append complete input lines.
+    /// Arguments: text is clipboard UTF-8. Returns: an unsupported-character error or success.
+    fn append(&mut self, text: &str) -> Result<(), String> {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut keys = VecDeque::new();
+        for line in normalized.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("```") {
+                continue;
+            }
+            for character in line.chars().chain(std::iter::once('\n')) {
+                keys.push_back(matrix_for_char(character).ok_or_else(|| {
+                    format!("clipboard contains unsupported character {character:?}")
+                })?);
+            }
+        }
+        self.pending.extend(keys);
+        Ok(())
+    }
+
+    /// Drive one frame of a pasted key, holding and releasing each for two frames.
+    /// Arguments: machine receives matrix changes. Returns: nothing.
+    fn step(&mut self, machine: &mut Machine) {
+        if self.active.is_none() {
+            self.active = self.pending.pop_front();
+            self.phase = 0;
+        }
+        let Some((key, shift)) = self.active else {
+            return;
+        };
+        if self.phase == 0 {
+            if shift {
+                machine.set_key(15, true);
+            }
+            machine.set_key(key, true);
+        } else if self.phase == 2 {
+            machine.set_key(key, false);
+            if shift {
+                machine.set_key(15, false);
+            }
+        }
+        self.phase += 1;
+        if self.phase == 4 {
+            self.active = None;
+        }
+    }
+
+    /// Discard pending text and release any currently held emulated key.
+    /// Arguments: machine receives matrix changes. Returns: nothing.
+    fn clear(&mut self, machine: &mut Machine) {
+        if let Some((key, shift)) = self.active.take() {
+            machine.set_key(key, false);
+            if shift {
+                machine.set_key(15, false);
+            }
+        }
+        self.pending.clear();
+        self.phase = 0;
+    }
+}
 
 /// The border widths are measured in emulator pixels on every side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,9 +378,9 @@ fn set_menu_checked(_item: MenuItemHandle, _checked: bool) {}
 /// The menu handles permit clean replacement when the display size changes.
 struct WindowMenus {
     #[cfg(target_os = "macos")]
-    top_items: [*mut std::ffi::c_void; 3],
+    top_items: [*mut std::ffi::c_void; 4],
     #[cfg(not(target_os = "macos"))]
-    handles: [MenuHandle; 3],
+    handles: [MenuHandle; 4],
     fast_mode_item: MenuItemHandle,
     sound_item: MenuItemHandle,
     joystick_help_item: MenuItemHandle,
@@ -278,8 +403,11 @@ impl WindowMenus {
 }
 
 /// Build the window and its menus for the current desktop settings.
-/// Arguments: settings controls zoom, border, and status height. Returns: window and menu handles or an error.
-fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), String> {
+/// Arguments: settings controls the display; host_text receives layout-translated keys. Returns: window and menu handles or an error.
+fn create_window(
+    settings: DesktopSettings,
+    host_text: Rc<RefCell<VecDeque<char>>>,
+) -> Result<(Window, WindowMenus), String> {
     let DesktopSettings {
         zoom,
         border,
@@ -302,6 +430,7 @@ fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), Str
         },
     )
     .map_err(|e| e.to_string())?;
+    window.set_input_callback(Box::new(HostText(host_text)));
     // The emulator's own PAL pacing controls the default rate. In Fast Mode,
     // minifb must also avoid its independent update-loop rate limit.
     window.set_target_fps(0);
@@ -333,11 +462,15 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
     set_menu_checked(sound_item, sound_enabled);
     let machine_top = macos_menu::attach(machine)?;
 
+    let edit = macos_menu::new("Edit")?;
+    macos_menu::paste_item(edit)?;
+    macos_menu::item(edit, "Delete Program Line", DELETE_LINE_ID)?;
+    let edit_top = macos_menu::attach(edit)?;
+
     let view = macos_menu::new("View")?;
     let status_item = macos_menu::item(view, "Show Status Bar", STATUS_ID)?;
     set_menu_checked(status_item, show_status);
-    let joystick_help_item =
-        macos_menu::item(view, "Show Joystick Keys (Break)", JOYSTICK_HELP_ID)?;
+    let joystick_help_item = macos_menu::item(view, "Show Joystick Keys", JOYSTICK_HELP_ID)?;
     set_menu_checked(joystick_help_item, show_joystick_help);
     macos_menu::separator(view);
     for (choice, label, id) in [
@@ -358,9 +491,9 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
     let window_menu = macos_menu::new("Window")?;
     let window_top = macos_menu::attach(window_menu)?;
     macos_menu::set_window_menu(window_menu);
-    macos_menu::debug_check_layout(machine, view, window_menu);
+    macos_menu::debug_check_layout(machine, edit, view, window_menu);
     Ok(WindowMenus {
-        top_items: [machine_top, view_top, window_top],
+        top_items: [machine_top, edit_top, view_top, window_top],
         fast_mode_item,
         sound_item,
         joystick_help_item,
@@ -390,11 +523,21 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
     set_menu_checked(sound_item, sound_enabled);
     let machine_handle = window.add_menu(&machine_menu);
 
+    let mut edit_menu = Menu::new("Edit").map_err(|e| e.to_string())?;
+    edit_menu
+        .add_item("Paste", PASTE_ID)
+        .shortcut(Key::V, minifb::MENU_KEY_CTRL)
+        .build();
+    edit_menu
+        .add_item("Delete Program Line", DELETE_LINE_ID)
+        .build();
+    let edit_handle = window.add_menu(&edit_menu);
+
     let mut view_menu = Menu::new("View").map_err(|e| e.to_string())?;
     let status_item = view_menu.add_item("Show Status Bar", STATUS_ID).build();
     set_menu_checked(status_item, show_status);
     let joystick_help_item = view_menu
-        .add_item("Show Joystick Keys (Break)", JOYSTICK_HELP_ID)
+        .add_item("Show Joystick Keys", JOYSTICK_HELP_ID)
         .build();
     set_menu_checked(joystick_help_item, show_joystick_help);
     view_menu.add_separator();
@@ -416,7 +559,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
     let window_menu = Menu::new("Window").map_err(|e| e.to_string())?;
     let window_handle = window.add_menu(&window_menu);
     Ok(WindowMenus {
-        handles: [machine_handle, view_handle, window_handle],
+        handles: [machine_handle, edit_handle, view_handle, window_handle],
         fast_mode_item,
         sound_item,
         joystick_help_item,
@@ -429,7 +572,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
 #[cfg(target_os = "macos")]
 mod macos_menu {
     use super::MenuItemHandle;
-    use std::ffi::{c_char, c_void, CString};
+    use std::ffi::{c_char, c_void, CStr, CString};
 
     type Object = *mut c_void;
 
@@ -463,7 +606,6 @@ mod macos_menu {
         /// Arguments: receiver and selector identify the call. Returns: returned object pointer.
         fn message_0(receiver: Object, selector: Object) -> Object;
         #[link_name = "objc_msgSend"]
-        #[cfg(debug_assertions)]
         /// Ask an Objective-C collection for its item count.
         /// Arguments: receiver and selector identify the call. Returns: number of items.
         fn message_count(receiver: Object, selector: Object) -> isize;
@@ -475,6 +617,10 @@ mod macos_menu {
         /// Send an Objective-C message with one object argument.
         /// Arguments: receiver and selector identify the call; value is its argument. Returns: nothing.
         fn message_1(receiver: Object, selector: Object, value: Object);
+        #[link_name = "objc_msgSend"]
+        /// Send an Objective-C message with one object argument and an object result.
+        /// Arguments: receiver and selector identify the call; value is its argument. Returns: an object pointer.
+        fn message_object_1(receiver: Object, selector: Object, value: Object) -> Object;
         #[link_name = "objc_msgSend"]
         /// Send an Objective-C message with an integer boolean.
         /// Arguments: receiver and selector identify the call; value is the boolean. Returns: nothing.
@@ -546,6 +692,54 @@ mod macos_menu {
         }
     }
 
+    /// Add Paste with AppKit's Command-V key equivalent.
+    /// Arguments: menu is the Edit menu. Returns: a menu item or an error.
+    pub fn paste_item(menu: Object) -> Result<MenuItemHandle, String> {
+        let handle = unsafe {
+            mfb_add_menu_item(
+                menu,
+                super::PASTE_ID as i32,
+                c"Paste".as_ptr(),
+                true,
+                0x09,
+                8,
+            )
+        };
+        if handle == 0 {
+            Err("could not create Paste menu item".to_string())
+        } else {
+            Ok(MenuItemHandle(handle))
+        }
+    }
+
+    /// Read plain UTF-8 text from the macOS general pasteboard.
+    /// Arguments: none. Returns: available text, no text, or an API error.
+    pub fn clipboard_text() -> Result<Option<String>, String> {
+        let text_type = string("public.utf8-plain-text")?;
+        unsafe {
+            let board = message_0(
+                objc_getClass(c"NSPasteboard".as_ptr()),
+                sel_registerName(c"generalPasteboard".as_ptr()),
+            );
+            if board.is_null() {
+                return Err("macOS pasteboard is unavailable".to_string());
+            }
+            let value = message_object_1(
+                board,
+                sel_registerName(c"stringForType:".as_ptr()),
+                text_type,
+            );
+            if value.is_null() {
+                return Ok(None);
+            }
+            let bytes = message_0(value, sel_registerName(c"UTF8String".as_ptr())) as *const c_char;
+            if bytes.is_null() {
+                return Ok(None);
+            }
+            Ok(Some(CStr::from_ptr(bytes).to_string_lossy().into_owned()))
+        }
+    }
+
     /// Add a visual separator to a native menu.
     /// Arguments: menu is the destination. Returns: nothing.
     pub fn separator(menu: Object) {
@@ -559,10 +753,14 @@ mod macos_menu {
     pub fn attach(menu: Object) -> Result<Object, String> {
         let empty = string("")?;
         unsafe {
+            let title = message_0(menu, sel_registerName(c"title".as_ptr()));
+            if title.is_null() {
+                return Err("macOS menu has no title".to_string());
+            }
             let top = message_3(
                 main_menu(),
                 sel_registerName(c"addItemWithTitle:action:keyEquivalent:".as_ptr()),
-                empty,
+                title,
                 std::ptr::null_mut(),
                 empty,
             );
@@ -570,6 +768,14 @@ mod macos_menu {
                 return Err("could not attach macOS menu".to_string());
             }
             message_1(top, sel_registerName(c"setSubmenu:".as_ptr()), menu);
+            message_1(top, sel_registerName(c"setTitle:".as_ptr()), title);
+            if message_count(
+                message_0(top, sel_registerName(c"title".as_ptr())),
+                sel_registerName(c"length".as_ptr()),
+            ) <= 0
+            {
+                return Err("macOS menu bar item has an empty title".to_string());
+            }
             message_bool(menu, sel_registerName(c"setAutoenablesItems:".as_ptr()), 0);
             Ok(top)
         }
@@ -589,12 +795,13 @@ mod macos_menu {
 
     /// Catch menu setup regressions during desktop development. System Window
     /// commands may grow later, but must never land in Machine or View.
-    /// Arguments: machine, view, and window are native menu pointers. Returns: nothing; debug assertions may fail.
-    pub fn debug_check_layout(machine: Object, view: Object, window: Object) {
+    /// Arguments: machine, edit, view, and window are native menu pointers. Returns: nothing; debug assertions may fail.
+    pub fn debug_check_layout(machine: Object, edit: Object, view: Object, window: Object) {
         #[cfg(debug_assertions)]
         unsafe {
             let count = sel_registerName(c"numberOfItems".as_ptr());
             debug_assert_eq!(message_count(machine, count), 5);
+            debug_assert_eq!(message_count(edit, count), 2);
             debug_assert_eq!(message_count(view, count), 10);
             debug_assert_eq!(
                 message_0(application(), sel_registerName(c"windowsMenu".as_ptr())),
@@ -602,12 +809,12 @@ mod macos_menu {
             );
         }
         #[cfg(not(debug_assertions))]
-        let _ = (machine, view, window);
+        let _ = (machine, edit, view, window);
     }
 
-    /// Remove the three native top-level menu items and clear AppKit's Window menu.
-    /// Arguments: top_items contains Machine, View, and Window item pointers. Returns: nothing.
-    pub fn remove(top_items: [Object; 3]) {
+    /// Remove the four native top-level menu items and clear AppKit's Window menu.
+    /// Arguments: top_items contains Machine, Edit, View, and Window item pointers. Returns: nothing.
+    pub fn remove(top_items: [Object; 4]) {
         set_window_menu(std::ptr::null_mut());
         unsafe {
             for item in top_items.into_iter().rev() {
@@ -615,6 +822,34 @@ mod macos_menu {
             }
         }
     }
+}
+
+/// Read plain clipboard text using the platform's clipboard command.
+/// Arguments: none. Returns: available text or a clear command failure.
+#[cfg(not(target_os = "macos"))]
+fn clipboard_text() -> Result<Option<String>, String> {
+    use std::process::Command;
+    for (program, args) in [
+        ("wl-paste", &["--no-newline"][..]),
+        ("xclip", &["-selection", "clipboard", "-out"][..]),
+        ("xsel", &["--clipboard", "--output"][..]),
+    ] {
+        if let Ok(output) = Command::new(program).args(args).output() {
+            if output.status.success() {
+                return String::from_utf8(output.stdout)
+                    .map(Some)
+                    .map_err(|error| error.to_string());
+            }
+        }
+    }
+    Err("no supported clipboard command found".to_string())
+}
+
+/// Read plain text from the native macOS pasteboard.
+/// Arguments: none. Returns: available text, no text, or a pasteboard error.
+#[cfg(target_os = "macos")]
+fn clipboard_text() -> Result<Option<String>, String> {
+    macos_menu::clipboard_text()
 }
 
 /// Five-by-seven glyphs shared by the status meter and joystick help panel.
@@ -786,7 +1021,7 @@ fn draw_joystick_help(buffer: &mut [u32], width: usize, video_height: usize) {
         (120, "UP 3   DOWN W", 0xffffff),
         (136, "LEFT A RIGHT 4", 0xffffff),
         (152, "FIRE SHIFT", 0xffffff),
-        (173, "BREAK TO CLOSE", 0x9ba9b5),
+        (173, "USE MENU TO CLOSE", 0x9ba9b5),
     ] {
         draw_help_text(buffer, width, text_x, y + offset, label, color);
     }
@@ -960,7 +1195,7 @@ fn matrix_key(key: Key) -> Option<u8> {
         Key::Left => 48,
         Key::Apostrophe => 49,
         Key::Right => 51,
-        Key::Escape => 52,
+        Key::Escape | Key::Pause | Key::F15 => 52,
         Key::Equal => 53,
         Key::Slash => 55,
         Key::Key1 => 56,
@@ -974,6 +1209,21 @@ fn matrix_key(key: Key) -> Option<u8> {
         Key::LeftShift | Key::RightShift => 15,
         _ => return None,
     })
+}
+
+/// Map host editing keys to the free ROM's input-editor matrix positions.
+/// Arguments: key is the host key code. Returns: an editor key or None.
+fn basic_edit_key(key: Key) -> Option<u8> {
+    match key {
+        Key::Enter => Some(1),
+        Key::Backspace => Some(0),
+        Key::Delete => Some(3),
+        Key::Down => Some(40),
+        Key::Up => Some(43),
+        Key::Left => Some(48),
+        Key::Right => Some(51),
+        _ => None,
+    }
 }
 
 /// Print the package version, copyright and project URL.
@@ -1156,6 +1406,7 @@ fn run() -> Result<(), String> {
         }
     }
     machine.run_frames(100)?;
+    let free_basic_boot = machine.capture_text_screen().contains("FREE BASIC V");
     for line in typed {
         machine.type_text(&line)?;
         machine.type_text("\n")?;
@@ -1167,7 +1418,9 @@ fn run() -> Result<(), String> {
             run_address = Some(address);
         }
     }
-    if let Some(address) = go_address.or(run_address) {
+    let start_address = go_address.or(run_address);
+    let free_basic_input = free_basic_boot && start_address.is_none();
+    if let Some(address) = start_address {
         machine.cpu.pc = address;
     }
     if headless {
@@ -1206,7 +1459,8 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
-    let (mut window, mut menus) = create_window(settings)?;
+    let host_text = Rc::new(RefCell::new(VecDeque::new()));
+    let (mut window, mut menus) = create_window(settings, host_text.clone())?;
     if !config_path.exists() {
         save_settings(&config_path, settings);
     }
@@ -1218,6 +1472,7 @@ fn run() -> Result<(), String> {
     let mut mips = 0.0;
     let mut realtime = 0.0;
     let mut left_was_down = false;
+    let mut paste = PasteQueue::default();
     let audio_debug = env::var_os("XC16EMU_AUDIO_DEBUG").is_some();
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // A setting that changes the video crop or status area changes the
@@ -1228,6 +1483,8 @@ fn run() -> Result<(), String> {
         if let Some(id) = window.is_menu_pressed() {
             match id {
                 RESET_ID => {
+                    paste.clear(&mut machine);
+                    host_text.borrow_mut().clear();
                     machine.reset();
                     if let Some(audio) = &audio {
                         audio.clear();
@@ -1239,6 +1496,21 @@ fn run() -> Result<(), String> {
                     next_frame = meter_time;
                 }
                 FAST_MODE_ID => toggle_fast_mode = true,
+                PASTE_ID => match clipboard_text() {
+                    Ok(Some(text)) => {
+                        host_text.borrow_mut().clear();
+                        if let Err(error) = paste.append(&text) {
+                            eprintln!("paste: {error}");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => eprintln!("paste: {error}"),
+                },
+                DELETE_LINE_ID if free_basic_input => {
+                    paste.clear(&mut machine);
+                    paste.append_key(3); // Clear text, retaining the line number.
+                    paste.append_key(1); // Submit that number to delete the record.
+                }
                 SOUND_ID => {
                     if settings.sound_enabled {
                         machine.set_audio_sample_rate(0);
@@ -1326,10 +1598,12 @@ fn run() -> Result<(), String> {
             // menus explicitly before replacing the window.
             menus.remove(&mut window);
             drop(window);
-            (window, menus) = create_window(settings)?;
+            (window, menus) = create_window(settings, host_text.clone())?;
             window.set_position(position.0, position.1);
         }
         if window.is_key_pressed(Key::F12, minifb::KeyRepeat::No) {
+            paste.clear(&mut machine);
+            host_text.borrow_mut().clear();
             machine.reset();
             if let Some(audio) = &audio {
                 audio.clear();
@@ -1340,25 +1614,63 @@ fn run() -> Result<(), String> {
             meter_time = Instant::now();
             next_frame = meter_time;
         }
-        // macOS reports the Break key on many external keyboards as F15;
-        // other minifb backends report Pause directly.
-        if window.is_key_pressed(Key::Pause, minifb::KeyRepeat::No)
-            || window.is_key_pressed(Key::F15, minifb::KeyRepeat::No)
+        if free_basic_input
+            && (window.is_key_pressed(Key::Pause, minifb::KeyRepeat::No)
+                || window.is_key_pressed(Key::F15, minifb::KeyRepeat::No))
         {
-            settings.show_joystick_help = !settings.show_joystick_help;
-            set_menu_checked(menus.joystick_help_item, settings.show_joystick_help);
-            save_settings(&config_path, settings);
+            // A queued paste must not resume typing after RUN/STOP aborts BASIC.
+            paste.clear(&mut machine);
+            host_text.borrow_mut().clear();
         }
-        for key in window.get_keys_pressed(minifb::KeyRepeat::No) {
+        let command_down = if cfg!(target_os = "macos") {
+            window.is_key_down(Key::LeftSuper) || window.is_key_down(Key::RightSuper)
+        } else {
+            window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl)
+        };
+        let typed_chars: Vec<_> = host_text.borrow_mut().drain(..).collect();
+        if free_basic_input && !command_down {
+            for character in typed_chars {
+                if let Err(error) = paste.append_live_char(character) {
+                    eprintln!("keyboard: {error}");
+                }
+            }
+        }
+        let repeat = if free_basic_input {
+            minifb::KeyRepeat::Yes
+        } else {
+            minifb::KeyRepeat::No
+        };
+        for key in window.get_keys_pressed(repeat) {
+            if free_basic_input {
+                if let Some(index) = basic_edit_key(key) {
+                    paste.append_live_key((index, false));
+                }
+                continue;
+            }
+            // The host clipboard shortcut belongs to Edit, not the C16 V key.
+            if key == Key::V && command_down {
+                continue;
+            }
             if let Some(index) = matrix_key(key) {
                 machine.set_key(index, true);
             }
         }
         for key in window.get_keys_released() {
+            if free_basic_input {
+                continue;
+            }
             if let Some(index) = matrix_key(key) {
                 machine.set_key(index, false);
             }
         }
+        // Deliver RUN/STOP immediately, even when pasted or typed text is
+        // still waiting in the free BASIC keyboard queue. AppKit can call
+        // Break F15 on external keyboards; other backends call it Pause.
+        machine.set_key(
+            52,
+            window.is_key_down(Key::Pause) || window.is_key_down(Key::F15),
+        );
+        paste.step(&mut machine);
         machine.run_frames(1)?;
         if let Some(audio) = &audio {
             audio.push(machine.drain_audio_samples());
@@ -1441,6 +1753,97 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Keep every desktop cursor and delete key wired to the ROM editor.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
+    fn basic_editor_receives_cursor_and_delete_keys() {
+        assert_eq!(basic_edit_key(Key::Left), Some(48));
+        assert_eq!(basic_edit_key(Key::Right), Some(51));
+        assert_eq!(basic_edit_key(Key::Up), Some(43));
+        assert_eq!(basic_edit_key(Key::Down), Some(40));
+        assert_eq!(basic_edit_key(Key::Delete), Some(3));
+        assert_eq!(basic_edit_key(Key::Backspace), Some(0));
+        assert_eq!(matrix_key(Key::Pause), Some(52));
+        assert_eq!(matrix_key(Key::F15), Some(52));
+    }
+
+    #[test]
+    /// Feed host layout text, including multiplication, through the ROM input queue.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
+    fn host_text_types_special_characters() {
+        let chars = Rc::new(RefCell::new(VecDeque::new()));
+        let mut callback = HostText(chars.clone());
+        for character in "PRINT 2*3".chars() {
+            callback.add_char(character as u32);
+        }
+        callback.add_char(0xf700); // AppKit's duplicate Up-arrow character.
+        assert_eq!(chars.borrow().len(), 9);
+        let mut queue = PasteQueue::default();
+        for character in chars.borrow_mut().drain(..) {
+            queue.append_live_char(character).unwrap();
+        }
+        queue.append_live_char('\n').unwrap();
+        let frames = queue.pending.len() * 4;
+        let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms");
+        let mut machine = Machine::from_rom_dir(roms).unwrap();
+        machine.run_frames(5).unwrap();
+        for _ in 0..frames {
+            queue.step(&mut machine);
+            machine.run_frames(1).unwrap();
+        }
+        assert!(machine.capture_text_screen().contains(" 6 "));
+    }
+
+    #[test]
+    /// Cap only identical live keys; mixed typing and clipboard text stay intact.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
+    fn live_key_repeat_has_a_five_key_tail_limit() {
+        let mut queue = PasteQueue::default();
+        for _ in 0..20 {
+            queue.append_live_char('A').unwrap();
+        }
+        queue.append_live_char('B').unwrap();
+        for _ in 0..20 {
+            queue.append_live_char('A').unwrap();
+        }
+        let a = matrix_for_char('A').unwrap();
+        let b = matrix_for_char('B').unwrap();
+        assert_eq!(
+            queue.pending.iter().copied().collect::<Vec<_>>(),
+            [vec![a; 5], vec![b], vec![a; 5]].concat()
+        );
+
+        for _ in 0..20 {
+            queue.append_live_key((43, false)); // Held cursor Up.
+        }
+        assert_eq!(queue.pending.len(), 16);
+
+        let mut pasted = PasteQueue::default();
+        pasted.append("AAAAAAAAAA").unwrap();
+        assert_eq!(pasted.pending.len(), 11); // Ten A keys plus Return.
+    }
+
+    #[test]
+    /// Verify Markdown BASIC lines are normalized and submitted to the ROM.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
+    fn paste_queue_types_basic_and_ignores_code_fences() {
+        let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms");
+        let mut machine = Machine::from_rom_dir(roms).unwrap();
+        machine.run_frames(5).unwrap();
+        let mut paste = PasteQueue::default();
+        paste
+            .append("```basic\r\nPRINT 2+3*4 : REM test\r\n```\r\n")
+            .unwrap();
+        let frames = paste.pending.len() * 4;
+        for _ in 0..frames {
+            paste.step(&mut machine);
+            machine.run_frames(1).unwrap();
+        }
+        let text = machine.capture_text_screen();
+        assert!(text.contains(" 14 "), "{text}");
+        assert!(!text.contains("?SYNTAX ERROR"), "{text}");
+    }
 
     #[test]
     /// Check settings serialization and invalid-input fallback.
@@ -1551,7 +1954,7 @@ mod tests {
             "UP 3   DOWN W",
             "LEFT A RIGHT 4",
             "FIRE SHIFT",
-            "BREAK TO CLOSE",
+            "USE MENU TO CLOSE",
         ] {
             assert!(label
                 .chars()

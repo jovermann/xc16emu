@@ -784,14 +784,14 @@ fn screen_code_to_char(code: u8) -> char {
         29 => ']',
         30 => '^',
         31 => '_',
-        32..=95 => (code & 0x7f) as char,
+        32..=126 => (code & 0x7f) as char,
         _ => '.',
     }
 }
 
 /// Map printable BASIC source text to a C16 matrix key and Shift state.
 /// Arguments: character is the desired typed symbol. Returns: key index and Shift state, or None if unsupported.
-fn matrix_for_char(character: char) -> Option<(u8, bool)> {
+pub fn matrix_for_char(character: char) -> Option<(u8, bool)> {
     let key = match character.to_ascii_uppercase() {
         'A' => 10,
         'B' => 28,
@@ -824,6 +824,29 @@ fn matrix_for_char(character: char) -> Option<(u8, bool)> {
         '2' => 59,
         '3' => 8,
         '4' => 11,
+        '$' => 11,
+        '!' => 56,
+        '"' => 59,
+        '#' => 8,
+        '%' => 16,
+        '&' => 19,
+        '\'' => 24,
+        '(' => 27,
+        ')' => 32,
+        '@' => 35,
+        '<' => 47,
+        '>' => 44,
+        '?' => 55,
+        '_' => 46,
+        '^' => 54,
+        '[' => 45,
+        ']' => 50,
+        '\\' => 53,
+        '`' => 49,
+        '{' => 9,
+        '}' => 14,
+        '|' => 17,
+        '~' => 22,
         '5' => 16,
         '6' => 19,
         '7' => 24,
@@ -839,12 +862,36 @@ fn matrix_for_char(character: char) -> Option<(u8, bool)> {
         ';' => 50,
         ',' => 47,
         '.' => 44,
-        '?' => 55,
-        '"' => 59,
-        '(' => 27,
-        ')' => 32,
+        '\u{8}' => 0,
         '\n' | '\r' => 1,
         _ => return None,
     };
-    Some((key, matches!(character, '"' | '(' | ')' | '?')))
+    Some((
+        key,
+        matches!(
+            character,
+            '!' | '"'
+                | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '('
+                | ')'
+                | '@'
+                | '<'
+                | '>'
+                | '?'
+                | '_'
+                | '^'
+                | '['
+                | ']'
+                | '\\'
+                | '`'
+                | '{'
+                | '}'
+                | '|'
+                | '~'
+        ),
+    ))
 }
