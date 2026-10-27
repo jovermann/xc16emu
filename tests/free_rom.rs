@@ -39,7 +39,7 @@ fn boots_with_independent_font_and_original_colors() {
 }
 
 #[test]
-/// Keep the slashed zero distinct from capital O and its center visibly open.
+/// Keep the reference zero distinct from capital O.
 /// Arguments: none. Returns: nothing; assertions report a regression.
 fn zero_glyph_is_open_and_distinct_from_o() {
     let mut machine = booted();
@@ -51,7 +51,6 @@ fn zero_glyph_is_open_and_distinct_from_o() {
     let zero = glyph(&mut machine, 48);
     let letter_o = glyph(&mut machine, 15);
     assert_ne!(zero, letter_o);
-    assert!(zero.iter().map(|row| row.count_ones()).sum::<u32>() < 28);
 }
 
 #[test]
@@ -59,9 +58,9 @@ fn zero_glyph_is_open_and_distinct_from_o() {
 /// Arguments: none. Returns: nothing; assertions report a regression.
 fn font_covers_both_reference_character_sets() {
     let mut machine = booted();
-    assert_eq!(machine.read(0xff07), 0x88);
+    assert_eq!(machine.read(0xff07), 0x08);
     for code in 0_u16..256 {
-        if [0x20, 0x60, 0xa0].contains(&code) {
+        if [0x20, 0x60, 0xa0, 0xe0].contains(&code) {
             continue; // Spaces in the corresponding reference character sets.
         }
         assert!(
@@ -77,16 +76,89 @@ fn font_covers_both_reference_character_sets() {
 }
 
 #[test]
-/// The editor's extended punctuation uses visible second-set glyphs.
+/// Native C16 text symbols use their original screen-code positions.
 /// Arguments: none. Returns: nothing; assertions report a regression.
-fn extended_ascii_uses_high_glyph_codes() {
+fn c16_symbols_use_native_screen_codes() {
     let mut machine = booted();
     let cell = u16::from_le_bytes([machine.ram[0x28], machine.ram[0x29]]) as usize;
-    machine.type_text("@[\\]^_`{|}~").unwrap();
+    machine.type_text("@[]^").unwrap();
     assert_eq!(
-        &machine.ram[0x0c00 + cell..0x0c00 + cell + 11],
-        &[0xc0, 0xdb, 0xdc, 0xdd, 0x9e, 0x9f, 0xe0, 0xfb, 0xfc, 0xfd, 0xfe]
+        &machine.ram[0x0c00 + cell..0x0c00 + cell + 4],
+        &[0, 27, 29, 30]
     );
+    assert!(xc16emu::matrix_for_char('~').is_none());
+}
+
+#[test]
+/// Shift+C= changes between the two 128-character ROM sets once per press.
+/// Arguments: none. Returns: nothing; assertions report a keyboard regression.
+fn shift_commodore_toggles_character_set() {
+    let mut machine = booted();
+    assert_eq!(machine.read(0xff13), 0xd0);
+    machine.set_key(15, true); // Shift
+    machine.set_key(61, true); // Commodore
+    machine.run_frames(5).unwrap();
+    assert_eq!(machine.read(0xff13), 0xd4);
+    machine.run_frames(5).unwrap();
+    assert_eq!(machine.read(0xff13), 0xd4); // Holding must not toggle again.
+    machine.set_key(61, false);
+    machine.set_key(15, false);
+    machine.run_frames(2).unwrap();
+    machine.set_key(15, true);
+    machine.set_key(61, true);
+    machine.run_frames(5).unwrap();
+    assert_eq!(machine.read(0xff13), 0xd0);
+}
+
+#[test]
+/// Guard the reference C16 punctuation and graphics while letters are edited.
+/// Arguments: none. Returns: nothing; assertions report a regression.
+fn non_alphanumeric_glyphs_keep_reference_shapes() {
+    let mut machine = booted();
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    for code in 0_u16..256 {
+        let is_letter_or_digit = (1..=26).contains(&code)
+            || (0x81..=0x9a).contains(&code)
+            || (0xc1..=0xda).contains(&code)
+            || (48..=57).contains(&code)
+            || (0xb0..=0xb9).contains(&code);
+        if !is_letter_or_digit {
+            for row in 0..8 {
+                checksum ^= machine.read(0xd000 + code * 8 + row) as u64;
+                checksum = checksum.wrapping_mul(0x100_0000_01b3);
+            }
+        }
+    }
+    assert_eq!(checksum, 0xa948_0d52_feb3_7c91);
+}
+
+#[test]
+/// Write 128 touching screen codes without changing anything outside $0C00.
+/// Arguments: none. Returns: nothing; assertions guard the live machine state.
+fn glyph_table_writes_only_the_screen_matrix() {
+    let mut machine = booted();
+    let before_ram = machine.ram.clone();
+    let before_registers = machine.ted.registers;
+    let before_pixels = machine.pixels.clone();
+    let before_keys = machine.key_matrix;
+    let before_pc = machine.cpu.pc;
+    let before_ticks = machine.ted.ticks;
+    machine.write_glyph_table_to_screen();
+    for index in 0_u8..128 {
+        let cell_x = 12 + index as usize % 16;
+        let cell_y = 8 + index as usize / 16;
+        assert_eq!(machine.ram[0x0c00 + cell_y * 40 + cell_x], index);
+        if cell_x < 27 {
+            assert_eq!(machine.ram[0x0c00 + cell_y * 40 + cell_x + 1], index + 1);
+        }
+    }
+    assert_eq!(&machine.ram[..0x0c00], &before_ram[..0x0c00]);
+    assert_eq!(&machine.ram[0x0fe8..], &before_ram[0x0fe8..]);
+    assert_eq!(machine.ted.registers, before_registers);
+    assert_eq!(machine.pixels, before_pixels);
+    assert_eq!(machine.key_matrix, before_keys);
+    assert_eq!(machine.cpu.pc, before_pc);
+    assert_eq!(machine.ted.ticks, before_ticks);
 }
 
 #[test]
@@ -94,6 +166,7 @@ fn extended_ascii_uses_high_glyph_codes() {
 /// Arguments: none. Returns: nothing; assertions report a regression.
 fn text_capture_decodes_second_set_lowercase() {
     let mut machine = booted();
+    machine.write(0xff07, 0x88);
     let row = machine.ram[0x2e] as usize;
     let col = machine.ram[0x27] as usize;
     machine.ram[0x0c00 + row * 40 + col] = 0x81;
@@ -314,11 +387,11 @@ fn deleting_middle_line_preserves_following_lines() {
 }
 
 #[test]
-/// Verify every ASCII punctuation character can be entered and listed.
+/// Verify native C16 punctuation can be entered and listed.
 /// Arguments: none. Returns: nothing; assertions report a regression.
 fn accepts_special_characters() {
     let mut machine = booted();
-    let symbols = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+    let symbols = "!\"#$%&'()*+,-./:;<=>?@[]";
     machine.type_text(&format!("10 REM {symbols}\n")).unwrap();
     machine.type_text("LIST\n").unwrap();
     let text = machine.capture_text_screen();

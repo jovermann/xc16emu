@@ -18,6 +18,7 @@ Features
 - macOS window with adjustable zoom and borders, status display, reset, Fast Mode, and joystick key help.
 - Edit → Paste (⌘V) types clipboard BASIC lines through the emulated keyboard and submits them with Return.
 - Persistent desktop settings in `~/.xc16emu.toml`.
+- Separate `font-editor` executable for editing the 256 glyphs in `free_roms/font.asm`.
 
 
 Build on macOS
@@ -40,6 +41,21 @@ This repository includes independently written ROM images in
 ```sh
 ./target/release/xc16emu --roms free_roms
 ```
+
+Edit the font source directly with the separate executable:
+
+```sh
+./target/release/font-editor free_roms/font.asm
+```
+
+The top strip magnifies five glyphs into 8×8 pixel cells. Left drag paints
+pixels; right drag or Shift drag scrolls the strip. Left/Right and the scroll
+wheel select glyphs; Up/Down jumps 16 glyphs. Click the 16×16 grid to select a
+glyph. `U` undoes an edit, `R` restores one glyph to its original shape, and `L`
+copies first-set glyphs to second-set glyphs with the same original bitmap,
+even at different code indices. `H` toggles help; Q or Escape saves and quits.
+Changed pixels are saved to the same ASM file once per second. Rebuild the ROM
+with `make -C free_roms` to use edits in the emulator.
 
 You can also supply a directory containing other compatible `basrom.dat` and
 `sysrom.dat` images with `--roms /path/to/roms`.
@@ -168,3 +184,7 @@ It does not yet model every TED bus-steal phase or color subcycle. Sound is
 sampled at the output device rate; the high-frequency tone edges and noise
 shift-register taps are approximations rather than transistor-level emulation.
 The desktop window uses a native macOS menu bar for machine and view settings.
+**View → Show 128 Glyphs** displays the system ROM's `$00`–`$7F` characters as
+a contiguous 16×8 grid with hex labels. The menu action writes only the
+`$0C00` screen matrix; the machine keeps running. Shift+Option switches the
+active ROM character set through the normal keyboard handling.

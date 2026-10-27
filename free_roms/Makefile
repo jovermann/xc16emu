@@ -7,7 +7,7 @@ all: basrom.dat sysrom.dat
 basrom.dat: basrom.asm
 	$(ASS6510) -o $@ $<
 
-sysrom.dat: sysrom.asm
+sysrom.dat: sysrom.asm font.asm
 	$(ASS6510) -o $@ $<
 
 test: all

@@ -3,6 +3,7 @@ name = "xc16emu-rs"
 version = "0.1.0"
 edition = "2021"
 license = "BSL-1.0"
+default-run = "xc16emu"
 
 [dependencies]
 minifb = "0.28"
@@ -15,3 +16,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "xc16emu"
 path = "src/main.rs"
+
+[[bin]]
+name = "font-editor"
+path = "src/bin/font-editor.rs"

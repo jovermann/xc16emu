@@ -1,12 +1,9 @@
 # Independent BASIC ROMs
 
 `basrom.asm` and `sysrom.asm` are independently written 6502 assembly sources.
-They build into the 16 KiB `basrom.dat` and `sysrom.dat` images required by
-xc16emu. The system ROM has a bold, angular science-fiction typeface with
-uppercase, lowercase, symbols, and graphics across both C16 character sets.
-Its native line and block graphics join across character cells. The ROM uses
-the second set's duplicate positions for extra ASCII punctuation accepted by
-the free BASIC editor.
+`sysrom.asm` includes the editable `font.asm`. They build into the 16 KiB
+`basrom.dat` and `sysrom.dat` images required by xc16emu. The font starts with
+the reference C16 glyphs in all 256 screen-code positions.
 The startup banner identifies this early interpreter as **FREE BASIC V0.1**.
 
 ## ROM space used
@@ -14,7 +11,7 @@ The startup banner identifies this early interpreter as **FREE BASIC V0.1**.
 | ROM | Capacity | Used | Free |
 | --- | ---: | ---: | ---: |
 | `basrom.dat` | 16,384 bytes | 2,081 bytes | 14,303 bytes |
-| `sysrom.dat` | 16,384 bytes | 3,576 bytes | 12,808 bytes |
+| `sysrom.dat` | 16,384 bytes | 3,615 bytes | 12,769 bytes |
 
 These counts come from the current assembled address ranges, including the
 system ROM's 2,048-byte font area and the BASIC ROM's one-byte end marker.
@@ -29,13 +26,27 @@ cargo build --release --manifest-path ../ass6510/Cargo.toml
 make -C free_roms
 ```
 
+Edit the font with `./target/release/font-editor free_roms/font.asm` from the
+repository root, then run `make -C free_roms` again to assemble changed pixels.
+Hold an arrow key or use the scroll wheel to select glyphs. Left drag paints or
+erases in the enlarged strip or PIXELS pane; right drag or Shift drag scrolls
+the strip. The selected glyph flashes once in reverse in the 16×16 grid when
+selection changes. Press `I` to invert the picture while keeping the border
+blue, `H` to toggle help, and `Q` or Escape to save and quit.
+Press `U` to undo the last paint stroke or restore, and `R` to restore the
+selected glyph to its original shape.
+Press `L` to copy edited glyphs 0–127 to glyphs 128–255 with the same original
+bitmap, even when their code indices differ. A second-set glyph with no
+first-set match is left unchanged. If several first-set glyphs match, the
+same-index partner takes priority. The copy is one undoable edit.
+
 Run the emulator with these images:
 
 ```sh
 cargo run --release -- --roms free_roms
 ```
 
-Run the headless ROM checks without opening an audio device:
+Run the headless ROM checks:
 
 ```sh
 make -C free_roms test
@@ -56,14 +67,15 @@ for editing. Backspace removes the
 preceding character, with key repeat when held. Forward Delete clears a line's
 text but keeps its number, so Return then deletes that stored program line.
 **Edit → Delete Program Line** performs both actions for the current numbered
-input line.
+input line. Shift+C= switches between the uppercase/graphics and
+lowercase/uppercase character sets; on macOS, Option is the C= key.
 
 Program text occupies `$1200`–`$3fff`, a region available on every supported
 RAM configuration. The boot title shows the unused bytes measured at startup
 and stays on the screen until normal output scrolls it away. A stored line uses three bytes of
 metadata plus its text. The Edit → Paste menu item and Command-V type clipboard
 lines through the emulated keyboard and submit each line with Return. Interactive
-text uses the host keyboard layout, so ASCII punctuation such as `*`, quotes,
+text uses the host keyboard layout, so C16 punctuation such as `*`, quotes,
 brackets, and comparison signs can be entered directly. Output scrolls up when
 the 25-line screen fills.
 

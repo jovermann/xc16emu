@@ -445,6 +445,40 @@ impl Machine {
         out
     }
 
+    /// Write all 128 screen codes into the $0C00 matrix as a 16 by 8 grid.
+    /// Arguments: self receives only screen-memory writes. Returns: nothing.
+    /// The current TED character-set selection determines which 128 glyphs appear.
+    pub fn write_glyph_table_to_screen(&mut self) {
+        let screen = &mut self.ram[0x0c00..0x0fe8];
+        screen.fill(0x20);
+
+        let title = b"ROM GLYPHS 00-7F";
+        for (offset, &letter) in title.iter().enumerate() {
+            screen[3 * 40 + 12 + offset] = if letter.is_ascii_uppercase() {
+                letter - b'A' + 1
+            } else {
+                letter
+            };
+        }
+        // Labels sit outside the touching 16 by 8 block of glyph cells.
+        for column in 0..16 {
+            let nibble = column as u8;
+            screen[6 * 40 + 12 + column] = if nibble < 10 {
+                b'0' + nibble
+            } else {
+                nibble - 9
+            };
+        }
+        for row in 0..8 {
+            let screen_row = 8 + row;
+            screen[screen_row * 40 + 9] = b'0' + row as u8;
+            screen[screen_row * 40 + 10] = b'0';
+            for column in 0..16 {
+                screen[screen_row * 40 + 12 + column] = (row * 16 + column) as u8;
+            }
+        }
+    }
+
     /// Convert a TED color number into 24-bit RGB for GUI display.
     /// Arguments: color is the TED palette index. Returns: packed 24-bit RGB.
     pub fn rgb(color: u8) -> u32 {
@@ -785,10 +819,10 @@ fn screen_code_to_char(code: u8, full_glyph_set: bool) -> char {
         0 => '@',
         1..=26 => (b'A' + (code & 0x7f) - 1) as char,
         27 => '[',
-        28 => '\\',
+        28 => '£',
         29 => ']',
-        30 => '^',
-        31 => '_',
+        30 => '↑',
+        31 => '←',
         32..=126 => (code & 0x7f) as char,
         _ => '.',
     }
@@ -842,16 +876,9 @@ pub fn matrix_for_char(character: char) -> Option<(u8, bool)> {
         '<' => 47,
         '>' => 44,
         '?' => 55,
-        '_' => 46,
         '^' => 54,
         '[' => 45,
         ']' => 50,
-        '\\' => 53,
-        '`' => 49,
-        '{' => 9,
-        '}' => 14,
-        '|' => 17,
-        '~' => 22,
         '5' => 16,
         '6' => 19,
         '7' => 24,
@@ -887,16 +914,9 @@ pub fn matrix_for_char(character: char) -> Option<(u8, bool)> {
                 | '<'
                 | '>'
                 | '?'
-                | '_'
                 | '^'
                 | '['
                 | ']'
-                | '\\'
-                | '`'
-                | '{'
-                | '}'
-                | '|'
-                | '~'
         ),
     ))
 }

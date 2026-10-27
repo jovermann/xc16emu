@@ -35,6 +35,7 @@ const SOUND_ID: usize = 10;
 const JOYSTICK_HELP_ID: usize = 11;
 const PASTE_ID: usize = 12;
 const DELETE_LINE_ID: usize = 13;
+const GLYPH_TABLE_ID: usize = 14;
 
 /// Capture layout-translated text from the host window, including punctuation.
 struct HostText(Rc<RefCell<VecDeque<char>>>);
@@ -472,6 +473,7 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
     set_menu_checked(status_item, show_status);
     let joystick_help_item = macos_menu::item(view, "Show Joystick Keys", JOYSTICK_HELP_ID)?;
     set_menu_checked(joystick_help_item, show_joystick_help);
+    macos_menu::item(view, "Show 128 Glyphs", GLYPH_TABLE_ID)?;
     macos_menu::separator(view);
     for (choice, label, id) in [
         (BorderSize::Big, "Border: Big", BIG_BORDER_ID),
@@ -540,6 +542,9 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         .add_item("Show Joystick Keys", JOYSTICK_HELP_ID)
         .build();
     set_menu_checked(joystick_help_item, show_joystick_help);
+    view_menu
+        .add_item("Show 128 Glyphs", GLYPH_TABLE_ID)
+        .build();
     view_menu.add_separator();
     for (choice, label, id) in [
         (BorderSize::Big, "Border: Big", BIG_BORDER_ID),
@@ -1460,6 +1465,7 @@ fn run() -> Result<(), String> {
         None
     };
     let host_text = Rc::new(RefCell::new(VecDeque::new()));
+    let mut charset_combo_was_down = false;
     let (mut window, mut menus) = create_window(settings, host_text.clone())?;
     if !config_path.exists() {
         save_settings(&config_path, settings);
@@ -1539,6 +1545,9 @@ fn run() -> Result<(), String> {
                     settings.show_joystick_help = !settings.show_joystick_help;
                     set_menu_checked(menus.joystick_help_item, settings.show_joystick_help);
                     persist_settings = true;
+                }
+                GLYPH_TABLE_ID => {
+                    machine.write_glyph_table_to_screen();
                 }
                 BIG_BORDER_ID | MEDIUM_BORDER_ID | COMPACT_BORDER_ID => {
                     settings.border = match id {
@@ -1627,8 +1636,18 @@ fn run() -> Result<(), String> {
         } else {
             window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl)
         };
+        let shift_down = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
+        let commodore_down = window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::RightAlt);
+        let charset_combo_down = shift_down && commodore_down;
+        if free_basic_input && charset_combo_down && !charset_combo_was_down {
+            // The free editor uses a host text queue; let this hardware
+            // shortcut reach its ROM without queued characters in front.
+            paste.clear(&mut machine);
+            host_text.borrow_mut().clear();
+        }
+        charset_combo_was_down = charset_combo_down;
         let typed_chars: Vec<_> = host_text.borrow_mut().drain(..).collect();
-        if free_basic_input && !command_down {
+        if free_basic_input && !command_down && !commodore_down {
             for character in typed_chars {
                 if let Err(error) = paste.append_live_char(character) {
                     eprintln!("keyboard: {error}");
@@ -1671,6 +1690,14 @@ fn run() -> Result<(), String> {
             window.is_key_down(Key::Pause) || window.is_key_down(Key::F15),
         );
         paste.step(&mut machine);
+        // Modifier state is sampled every frame. The Cocoa backend can
+        // report a modifier through flagsChanged without a key-down edge.
+        // Preserve Shift held by the paste queue as well as the host key.
+        let queued_shift = paste
+            .active
+            .is_some_and(|(_, shifted)| shifted && (1..=2).contains(&paste.phase));
+        machine.set_key(15, shift_down || queued_shift);
+        machine.set_key(61, commodore_down);
         machine.run_frames(1)?;
         if let Some(audio) = &audio {
             audio.push(machine.drain_audio_samples());
