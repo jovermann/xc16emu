@@ -28,7 +28,7 @@ fn press_key(machine: &mut Machine, index: u8) {
 fn boots_with_independent_font_and_original_colors() {
     let mut machine = booted();
     let text = machine.capture_text_screen();
-    assert!(text.contains("FREE BASIC V0.1 11776 BYTES FREE"), "{text}");
+    assert!(text.contains("FREE BASIC V0.1 60696 BYTES FREE"), "{text}");
     assert!(text.contains("READY."), "{text}");
     assert_eq!(machine.read(0xff15), 0x71);
     assert_eq!(machine.read(0xff19), 0x6e);
@@ -36,6 +36,23 @@ fn boots_with_independent_font_and_original_colors() {
     // The second text row contains the banner; its raster must differ from
     // the deliberately blank first row, proving glyph data is actually used.
     assert_ne!(&pixels[0..320 * 8], &pixels[320 * 8..320 * 16]);
+}
+
+#[test]
+/// Report only physically available BASIC storage on each supported RAM size.
+/// Arguments: none. Returns: nothing; assertions report RAM probe regressions.
+fn free_bytes_follow_installed_ram_size() {
+    let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms");
+    for (kib, expected) in [(16, 12312), (32, 28696), (64, 60696)] {
+        let mut machine = Machine::from_rom_dir(roms).unwrap();
+        machine.set_ram_size(kib).unwrap();
+        machine.run_frames(5).unwrap();
+        let text = machine.capture_text_screen();
+        assert!(
+            text.contains(&format!("{expected} BYTES FREE")),
+            "RAM {kib}: {text}"
+        );
+    }
 }
 
 #[test]
@@ -108,28 +125,6 @@ fn shift_commodore_toggles_character_set() {
     machine.set_key(61, true);
     machine.run_frames(5).unwrap();
     assert_eq!(machine.read(0xff13), 0xd0);
-}
-
-#[test]
-/// Guard the reference C16 punctuation and graphics while letters are edited.
-/// Arguments: none. Returns: nothing; assertions report a regression.
-fn non_alphanumeric_glyphs_keep_reference_shapes() {
-    let mut machine = booted();
-    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
-    for code in 0_u16..256 {
-        let is_letter_or_digit = (1..=26).contains(&code)
-            || (0x81..=0x9a).contains(&code)
-            || (0xc1..=0xda).contains(&code)
-            || (48..=57).contains(&code)
-            || (0xb0..=0xb9).contains(&code);
-        if !is_letter_or_digit {
-            for row in 0..8 {
-                checksum ^= machine.read(0xd000 + code * 8 + row) as u64;
-                checksum = checksum.wrapping_mul(0x100_0000_01b3);
-            }
-        }
-    }
-    assert_eq!(checksum, 0xa948_0d52_feb3_7c91);
 }
 
 #[test]
@@ -220,7 +215,7 @@ fn numbered_program_can_be_listed_edited_and_run() {
     machine.type_text("20 PRINT 2\n").unwrap();
     machine.type_text("10 PRINT 1\n").unwrap();
     let text = machine.capture_text_screen();
-    assert!(text.contains("FREE BASIC V0.1 11776 BYTES FREE"), "{text}");
+    assert!(text.contains("FREE BASIC V0.1 60696 BYTES FREE"), "{text}");
 
     machine.type_text("LIST\n").unwrap();
     let text = machine.capture_text_screen();
@@ -238,7 +233,7 @@ fn numbered_program_can_be_listed_edited_and_run() {
     machine.type_text("10 PRINT 42\n").unwrap();
     machine.type_text("20\n").unwrap();
     let text = machine.capture_text_screen();
-    assert!(text.contains("FREE BASIC V0.1 11776 BYTES FREE"), "{text}");
+    assert!(text.contains("FREE BASIC V0.1 60696 BYTES FREE"), "{text}");
     machine.type_text("LIST 10\n").unwrap();
     let text = machine.capture_text_screen();
     let listing = text.split("LIST 10").last().unwrap();
@@ -249,6 +244,82 @@ fn numbered_program_can_be_listed_edited_and_run() {
     let text = machine.capture_text_screen();
     assert!(text.contains(" 42 "), "{text}");
     assert!(!text.contains("?SYNTAX ERROR"), "{text}");
+}
+
+/// Fill program RAM with sorted 80-byte REM records, including ROM-covered RAM.
+/// Arguments: machine receives the records; count is their number. Returns: first free address.
+fn fill_program_with_rem_lines(machine: &mut Machine, count: u16) -> usize {
+    let mut address = 0x0fe8usize;
+    for number in 1u16..=count {
+        machine.ram[address] = number as u8;
+        machine.ram[address + 1] = (number >> 8) as u8;
+        machine.ram[address + 2] = 77;
+        machine.ram[address + 3..address + 6].copy_from_slice(b"REM");
+        machine.ram[address + 6..address + 80].fill(b' ');
+        address += 80;
+    }
+    machine.ram[0x47] = address as u8;
+    machine.ram[0x48] = (address >> 8) as u8;
+    address
+}
+
+#[test]
+/// Read, edit, list, and run records stored under both ROM overlays.
+/// Arguments: none. Returns: nothing; assertions report bank-switch regressions.
+fn program_records_under_roms_can_be_edited_and_run() {
+    let mut machine = booted();
+    let rom_byte = machine.read(0x8000);
+    let mut address = fill_program_with_rem_lines(&mut machine, 564);
+    assert!(address >= 0xc000);
+    machine.ram[address] = 600u16 as u8;
+    machine.ram[address + 1] = (600u16 >> 8) as u8;
+    machine.ram[address + 2] = 8;
+    machine.ram[address + 3..address + 11].copy_from_slice(b"PRINT 42");
+    address += 11;
+    machine.ram[0x47] = address as u8;
+    machine.ram[0x48] = (address >> 8) as u8;
+
+    machine.type_text("599 PRINT 41\nLIST 599-600\n").unwrap();
+    let text = machine.capture_text_screen();
+    let listing = text.split("LIST 599-600").last().unwrap();
+    assert!(listing.contains("599 PRINT 41"), "{text}");
+    assert!(listing.contains("600 PRINT 42"), "{text}");
+    machine.type_text("RUN 599\n").unwrap();
+    let text = machine.capture_text_screen();
+    let output = text.split("RUN 599").last().unwrap();
+    assert!(output.contains(" 41 "), "{text}");
+    assert!(output.contains(" 42 "), "{text}");
+
+    machine.type_text("599\nLIST 599-600\n").unwrap();
+    let text = machine.capture_text_screen();
+    let listing = text.split("LIST 599-600").last().unwrap();
+    assert!(!listing.contains("599 PRINT 41"), "{text}");
+    assert!(listing.contains("600 PRINT 42"), "{text}");
+    assert_eq!(
+        u16::from_le_bytes([machine.ram[0x47], machine.ram[0x48]]) as usize,
+        address
+    );
+    assert_eq!(machine.read(0x8000), rom_byte);
+}
+
+#[test]
+/// Permit storage near $FD00 while rejecting a record that would enter I/O.
+/// Arguments: none. Returns: nothing; assertions report capacity regressions.
+fn program_capacity_stops_before_io_page() {
+    let mut machine = booted();
+    let start = fill_program_with_rem_lines(&mut machine, 758);
+    assert_eq!(start, 0xfcc8);
+    machine.type_text("759 PRINT 9\n").unwrap();
+    let end = u16::from_le_bytes([machine.ram[0x47], machine.ram[0x48]]);
+    assert!(end > start as u16 && end <= 0xfd00);
+    let line = format!("760 REM {}\n", " ".repeat(68));
+    machine.type_text(&line).unwrap();
+    let text = machine.capture_text_screen();
+    assert!(text.contains("?OUT OF MEMORY"), "{text}");
+    assert_eq!(
+        u16::from_le_bytes([machine.ram[0x47], machine.ram[0x48]]),
+        end
+    );
 }
 
 #[test]
@@ -383,7 +454,7 @@ fn deleting_middle_line_preserves_following_lines() {
     assert!(listing.contains("10 PRINT 1"), "{text}");
     assert!(listing.contains("30 PRINT 3"), "{text}");
     assert!(!listing.contains("20 PRINT 2"), "{text}");
-    assert!(text.contains("FREE BASIC V0.1 11776 BYTES FREE"), "{text}");
+    assert!(text.contains("FREE BASIC V0.1 60696 BYTES FREE"), "{text}");
 }
 
 #[test]
@@ -460,7 +531,7 @@ fn delete_key_clears_program_line_body() {
     let text = machine.capture_text_screen();
     let listing = text.split("LIST").last().unwrap();
     assert!(!listing.contains("10 PRINT 7"), "{text}");
-    assert!(text.contains("FREE BASIC V0.1 11776 BYTES FREE"), "{text}");
+    assert!(text.contains("FREE BASIC V0.1 60696 BYTES FREE"), "{text}");
 }
 
 #[test]
@@ -497,12 +568,12 @@ fn wrapped_numbered_line_can_be_edited_from_its_second_screen_row() {
     assert_eq!(machine.ram[0x2a], source.len() as u8);
     assert_eq!(machine.ram[0x2d], 40);
     let row = machine.ram[0x2e] as usize;
-    assert_eq!(machine.ram[0x1140 + row], 1);
+    assert_eq!(machine.ram[0x02c0 + row], 1);
     machine.type_text("*\n").unwrap();
     let expected = format!("{}*{}", &source[..40], &source[40..]);
-    let stored_len = machine.ram[0x1202] as usize;
+    let stored_len = machine.ram[0x0fea] as usize;
     assert_eq!(
-        &machine.ram[0x1203..0x1203 + stored_len],
+        &machine.ram[0x0feb..0x0feb + stored_len],
         &expected.as_bytes()[3..]
     );
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 //! 6502-compatible instruction engine used by the C16's 7501/8501 CPU.
 
-use crate::Machine;
+use crate::{memory_map::*, Machine};
 
 const C: u8 = 1;
 const Z: u8 = 2;
@@ -64,7 +64,7 @@ impl Machine {
     /// Push a byte onto the hardware stack.
     /// Arguments: value is the byte to push. Returns: nothing.
     fn push(&mut self, value: u8) {
-        self.ram[0x100 + self.cpu.sp as usize] = value;
+        self.ram[STACK_PAGE_START + self.cpu.sp as usize] = value;
         self.cpu.sp = self.cpu.sp.wrapping_sub(1);
     }
 
@@ -72,7 +72,7 @@ impl Machine {
     /// Arguments: the mutable machine state. Returns: the popped byte.
     fn pull(&mut self) -> u8 {
         self.cpu.sp = self.cpu.sp.wrapping_add(1);
-        self.ram[0x100 + self.cpu.sp as usize]
+        self.ram[STACK_PAGE_START + self.cpu.sp as usize]
     }
 
     /// Update zero and negative flags from an 8-bit result.
@@ -249,8 +249,8 @@ impl Machine {
         self.push(self.cpu.pc as u8);
         self.push((self.cpu.p & !B) | U);
         self.cpu.p |= I;
-        let lo = self.roms[1][0x3ffe];
-        let hi = self.roms[1][0x3fff];
+        let lo = self.roms[SYSTEM_ROM_IMAGE][SYSTEM_IRQ_VECTOR_OFFSET];
+        let hi = self.roms[SYSTEM_ROM_IMAGE][SYSTEM_IRQ_VECTOR_OFFSET + 1];
         self.cpu.pc = u16::from_le_bytes([lo, hi]);
     }
 
@@ -411,8 +411,8 @@ impl Machine {
                 self.push(self.cpu.pc as u8);
                 self.push(self.cpu.p | B | U);
                 self.cpu.p |= I;
-                let lo = self.read(0xfffe);
-                let hi = self.read(0xffff);
+                let lo = self.read(IRQ_VECTOR);
+                let hi = self.read(IRQ_VECTOR + 1);
                 self.cpu.pc = u16::from_le_bytes([lo, hi]);
                 7
             }

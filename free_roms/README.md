@@ -6,17 +6,31 @@
 the reference C16 glyphs in all 256 screen-code positions.
 The startup banner identifies this early interpreter as **FREE BASIC V0.1**.
 
+## BASIC program memory
+
+Numbered programs begin immediately after the 40×25 screen matrix at `$0FE8`.
+The ROM copies a small byte reader to `$0700` so it can briefly switch out the
+ROM overlays when reading program
+records. Storage stops before the hardware I/O page at `$FD00` on 64 KiB
+machines. The boot banner measures the available bytes for each RAM size:
+
+| RAM | Program area | Bytes free at boot |
+| --- | --- | ---: |
+| 16 KiB | `$0FE8`–`$3FFF` | 12,312 |
+| 32 KiB | `$0FE8`–`$7FFF` | 28,696 |
+| 64 KiB | `$0FE8`–`$FCFF` | 60,696 |
+
 ## ROM space used
 
 | ROM | Capacity | Used | Free |
 | --- | ---: | ---: | ---: |
-| `basrom.dat` | 16,384 bytes | 2,081 bytes | 14,303 bytes |
+| `basrom.dat` | 16,384 bytes | 2,172 bytes | 14,212 bytes |
 | `sysrom.dat` | 16,384 bytes | 3,615 bytes | 12,769 bytes |
 
 These counts come from the current assembled address ranges, including the
 system ROM's 2,048-byte font area and the BASIC ROM's one-byte end marker.
-Assembler-filled gaps are counted as free. BASIC has 14,303 consecutive free
-bytes at `$8820`–`$BFFE`. The system ROM has three free gaps; the largest is
+Assembler-filled gaps are counted as free. BASIC has 14,212 consecutive free
+bytes at `$887B`–`$BFFE`. The system ROM has three free gaps; the largest is
 10,233 bytes at `$D801`–`$FFF9`.
 
 Build the sibling assembler once, then build the ROMs:
@@ -70,8 +84,8 @@ text but keeps its number, so Return then deletes that stored program line.
 input line. Shift+C= switches between the uppercase/graphics and
 lowercase/uppercase character sets; on macOS, Option is the C= key.
 
-Program text occupies `$1200`–`$3fff`, a region available on every supported
-RAM configuration. The boot title shows the unused bytes measured at startup
+Program text uses the area for the installed RAM size shown above. The boot
+title shows the unused bytes measured at startup
 and stays on the screen until normal output scrolls it away. A stored line uses three bytes of
 metadata plus its text. The Edit → Paste menu item and Command-V type clipboard
 lines through the emulated keyboard and submit each line with Return. Interactive

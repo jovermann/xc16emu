@@ -12,6 +12,191 @@ use std::{
 };
 pub use video::{COMPACT_BORDER, COMPACT_HEIGHT, COMPACT_WIDTH, HEIGHT, WIDTH};
 
+/// CPU-visible memory map and device register numbers implemented by xc16emu.
+///
+/// `$0000-$7FFF` is RAM (mirrored on 16/32 KiB models). The 7501's `$0000`
+/// and `$0001` port registers are currently treated as RAM by this core.
+/// The free ROM uses
+/// `$0800-$0BFF` for colors, `$0C00-$0FE7` for text, and `$0FE8` onward for
+/// BASIC; those RAM assignments are software conventions, not fixed hardware.
+/// ROM can overlay `$8000-$BFFF` and `$C000-$FBFF`. System ROM supplies
+/// `$FC00-$FCFF` and `$FF40-$FFFF`. In the I/O gap, `$FD00-$FDFF` contains
+/// FD device/port/bank groups, `$FE00-$FEFF` contains the virtual IEC page,
+/// and `$FF00-$FF3F` contains TED registers. Unlisted FD groups return a
+/// fixed value; unlisted FE registers read as zero; unlisted TED registers
+/// retain their last written byte.
+pub mod memory_map {
+    /// Full 16-bit CPU address space.
+    pub const ADDRESS_SPACE_BYTES: usize = 0x10000;
+    /// 7501 CPU direction and data ports; currently backed by ordinary RAM.
+    pub const CPU_IO_DIRECTION: u16 = 0x0000;
+    pub const CPU_IO_DATA: u16 = 0x0001;
+    /// CPU stack page begins at `$0100`.
+    pub const STACK_PAGE_START: usize = 0x0100;
+    /// Free ROM's default color matrix at `$0800`.
+    pub const DEFAULT_COLOR_RAM: usize = 0x0800;
+    /// Free ROM's default screen matrix at `$0C00`.
+    pub const DEFAULT_SCREEN_RAM: usize = 0x0c00;
+    /// First byte after the 40×25 screen matrix, used by free BASIC.
+    pub const FREE_BASIC_RAM_START: usize = 0x0fe8;
+    /// A TED matrix places screen codes `$0400` bytes after color bytes.
+    pub const SCREEN_CODE_OFFSET: usize = 0x0400;
+
+    /// First address overlaid by the lower 16 KiB ROM bank.
+    pub const LOWER_ROM_START: u16 = 0x8000;
+    /// First address overlaid by the upper 16 KiB ROM bank.
+    pub const UPPER_ROM_START: u16 = 0xc000;
+    /// System ROM takes precedence over optional upper ROM banks here.
+    pub const SYSTEM_ROM_START: u16 = 0xfc00;
+    /// Hardware I/O begins here and takes precedence over RAM/ROM reads.
+    pub const IO_START: u16 = 0xfd00;
+    /// Virtual IEC register page begins here.
+    pub const IEC_PAGE_START: u16 = 0xfe00;
+    /// Low eight bits select a register within an I/O page.
+    pub const IO_PAGE_OFFSET_MASK: u16 = 0x00ff;
+    /// TED register page begins here.
+    pub const TED_PAGE_START: u16 = 0xff00;
+    /// I/O ends before the system ROM resumes at `$FF40`.
+    pub const IO_END: u16 = 0xff40;
+    /// One ROM image occupies 16 KiB.
+    pub const ROM_BANK_BYTES: usize = 0x4000;
+    /// Offset mask for a byte within a ROM image.
+    pub const ROM_BANK_MASK: usize = ROM_BANK_BYTES - 1;
+    /// Each optional ROM bank has lower and upper images.
+    pub const ROM_IMAGES_PER_BANK: usize = 2;
+    pub const UPPER_ROM_IMAGE_OFFSET: usize = 1;
+    /// Four pairs of lower/upper ROM images are addressable.
+    pub const ROM_IMAGE_COUNT: usize = 8;
+    /// The fixed system ROM is image index one.
+    pub const SYSTEM_ROM_IMAGE: usize = 1;
+    /// Physical RAM address masks for 16, 32, and 64 KiB machines.
+    pub const RAM_MASK_16K: u16 = 0x3fff;
+    pub const RAM_MASK_32K: u16 = 0x7fff;
+    pub const RAM_MASK_64K: u16 = 0xffff;
+
+    /// CPU NMI, reset, and IRQ/BRK vector addresses in system ROM.
+    pub const NMI_VECTOR: u16 = 0xfffa;
+    pub const RESET_VECTOR: u16 = 0xfffc;
+    pub const IRQ_VECTOR: u16 = 0xfffe;
+    /// Reset vector offset within the 16 KiB system ROM image.
+    pub const SYSTEM_RESET_VECTOR_OFFSET: usize = RESET_VECTOR as usize - UPPER_ROM_START as usize;
+    /// IRQ vector offset in the fixed 16 KiB system ROM image.
+    pub const SYSTEM_IRQ_VECTOR_OFFSET: usize = IRQ_VECTOR as usize - UPPER_ROM_START as usize;
+
+    /// FD-page decode preserves 16-byte register groups.
+    pub const FD_GROUP_MASK: u16 = 0xfff0;
+    /// `$FD00-$FD0F`: legacy fixed device response.
+    pub const FD_DEVICE_GROUP: u16 = 0xfd00;
+    /// `$FD10-$FD1F`: user-port latch.
+    pub const FD_USER_PORT_GROUP: u16 = 0xfd10;
+    /// `$FD30-$FD3F`: keyboard row select latch.
+    pub const FD_KEYBOARD_GROUP: u16 = 0xfd30;
+    /// `$FDD0-$FDDF`: lower/upper ROM bank selection by address bits.
+    pub const FD_ROM_BANK_GROUP: u16 = 0xfdd0;
+    /// Fixed replies from the emulated FD device and unimplemented FD groups.
+    pub const FD_DEVICE_RESPONSE: u8 = 0xac;
+    pub const FD_UNMAPPED_RESPONSE: u8 = 0x66;
+    /// Low two FDDx address bits select the lower ROM bank.
+    pub const LOWER_BANK_SELECT_MASK: u16 = 0x0003;
+    /// FDDx address bits 2-3 select the upper ROM bank.
+    pub const UPPER_BANK_SELECT_SHIFT: u16 = 2;
+
+    /// `$FEF0`: virtual IEC command/data register.
+    pub const IEC_DATA_REGISTER: u8 = 0xf0;
+    /// `$FEF1`: virtual IEC transfer status register.
+    pub const IEC_STATUS_REGISTER: u8 = 0xf1;
+    /// `$FEF2`: virtual IEC handshake register.
+    pub const IEC_HANDSHAKE_REGISTER: u8 = 0xf2;
+    /// Indices of the three virtual IEC register latches.
+    pub const IEC_DATA_INDEX: usize = 0;
+    pub const IEC_STATUS_INDEX: usize = 1;
+    pub const IEC_HANDSHAKE_INDEX: usize = 2;
+    pub const IEC_REGISTER_COUNT: usize = 3;
+    /// Virtual IEC command prefixes and one-byte read request.
+    pub const IEC_FRAMING_COMMAND: u8 = 0x81;
+    pub const IEC_SECONDARY_COMMAND: u8 = 0x82;
+    pub const IEC_SEND_BYTE_COMMAND: u8 = 0x83;
+    pub const IEC_READ_BYTE_COMMAND: u8 = 0x84;
+    /// Secondary-address high nibbles for naming and closing a file.
+    pub const IEC_NAME_SECONDARY: u8 = 0xf0;
+    pub const IEC_CLOSE_SECONDARY: u8 = 0xe0;
+    pub const IEC_SECONDARY_MASK: u8 = 0xf0;
+    /// Secondary-address low nibble selects read (zero) or write (nonzero).
+    pub const IEC_CHANNEL_MASK: u8 = 0x0f;
+    /// Virtual drive status bytes read through `$FEF1`.
+    pub const IEC_STATUS_OK: u8 = 0;
+    pub const IEC_STATUS_SAVE_ERROR: u8 = 1;
+    pub const IEC_STATUS_LOAD_ERROR: u8 = 2;
+    pub const IEC_STATUS_LAST_BYTE: u8 = 3;
+    /// Writing zero to `$FEF2` raises the emulated handshake flag to `$FF`.
+    pub const IEC_HANDSHAKE_ACK: u8 = 0xff;
+
+    /// TED register offsets relative to `$FF00`.
+    pub const TED_TIMER_FIRST: u8 = 0x00;
+    pub const TED_TIMER_LAST: u8 = 0x05;
+    pub const TED_CONTROL_1: u8 = 0x06;
+    pub const TED_CONTROL_2: u8 = 0x07;
+    pub const TED_KEYBOARD_LATCH: u8 = 0x08;
+    pub const TED_IRQ_STATUS: u8 = 0x09;
+    pub const TED_IRQ_CONTROL: u8 = 0x0a;
+    pub const TED_IRQ_LINE: u8 = 0x0b;
+    pub const TED_CURSOR_HIGH: u8 = 0x0c;
+    pub const TED_CURSOR_LOW: u8 = 0x0d;
+    pub const TED_TONE_1_LOW: u8 = 0x0e;
+    pub const TED_TONE_2_LOW: u8 = 0x0f;
+    pub const TED_TONE_2_HIGH: u8 = 0x10;
+    pub const TED_SOUND_CONTROL: u8 = 0x11;
+    pub const TED_BITMAP_AND_TONE_1_HIGH: u8 = 0x12;
+    pub const TED_CHARACTER_BASE: u8 = 0x13;
+    pub const TED_MATRIX_BASE: u8 = 0x14;
+    pub const TED_BACKGROUND_COLOR: u8 = 0x15;
+    pub const TED_EXTRA_COLOR_1: u8 = 0x16;
+    pub const TED_EXTRA_COLOR_2: u8 = 0x17;
+    pub const TED_EXTRA_COLOR_3: u8 = 0x18;
+    pub const TED_BORDER_COLOR: u8 = 0x19;
+    /// The frozen-image loader reapplies control through border registers.
+    pub const TED_SNAPSHOT_END: u16 = TED_PAGE_START + TED_BORDER_COLOR as u16 + 1;
+    pub const TED_RASTER_HIGH: u8 = 0x1c;
+    pub const TED_RASTER_LOW: u8 = 0x1d;
+    pub const TED_LINE_POSITION: u8 = 0x1e;
+    pub const TED_SHOW_ROM: u8 = 0x3e;
+    pub const TED_SHOW_RAM: u8 = 0x3f;
+    /// TED has 64 memory-mapped registers at `$FF00-$FF3F`.
+    pub const TED_REGISTER_MASK: u16 = 0x003f;
+    pub const TED_REGISTER_COUNT: usize = 64;
+    /// Selected TED control bits used by the renderer and CPU scheduler.
+    pub const TED_SCREEN_ENABLE_BIT: u8 = 0x10;
+    pub const TED_BITMAP_MODE_BIT: u8 = 0x20;
+    pub const TED_EXTENDED_MODE_BIT: u8 = 0x40;
+    pub const TED_FULL_GLYPH_SET_BIT: u8 = 0x80;
+    pub const TED_ROM_PATTERN_BIT: u8 = 0x04;
+    pub const TED_COLOR_VALUE_MASK: u8 = 0x7f;
+    /// TED interrupt flag and raster compare masks.
+    pub const TED_IRQ_PENDING_MASK: u8 = 0x7f;
+    pub const TED_IRQ_MASTER_BIT: u8 = 0x80;
+    pub const TED_IRQ_ENABLE_MASK: u8 = 0x5e;
+    pub const TED_RASTER_HIGH_BIT: u16 = 0x0100;
+    pub const TED_RASTER_LOW_MASK: u16 = 0x00ff;
+    /// Eight rows with eight physical keys each form the keyboard matrix.
+    pub const KEYBOARD_MATRIX_ROWS: usize = 8;
+    pub const KEYBOARD_MATRIX_KEYS: u8 = 64;
+    pub const KEYBOARD_IDLE_VALUE: u8 = 0xff;
+    /// FF08 active-low selection bits for joystick substitutes.
+    pub const JOYSTICK_1_SELECT_BIT: u8 = 0x04;
+    pub const JOYSTICK_2_SELECT_BIT: u8 = 0x02;
+    pub const JOYSTICK_1_MATRIX_ROW: usize = 2;
+    pub const JOYSTICK_2_MATRIX_ROW: usize = 1;
+    pub const JOYSTICK_DIRECTION_BITS: u8 = 0x0f;
+    pub const JOYSTICK_1_FIRE_BIT: u8 = 0x40;
+    pub const JOYSTICK_2_BITS: u8 = 0x8f;
+
+    /// RAM entry and saved stack pointer of the legacy frozen-image format.
+    pub const FROZEN_TRAMPOLINE: usize = 0x7200;
+    pub const FROZEN_STACK_POINTER: usize = 0x7ef3;
+}
+
+use memory_map::*;
+
 /// PAL raster lines per frame.
 pub const LINES_PER_FRAME: u16 = 312;
 /// Nominal PAL TED timing ticks per wall-clock second.
@@ -23,7 +208,7 @@ const TICKS_PER_LINE: u32 = 114;
 /// TED registers and timing state.
 pub struct Ted {
     /// Last written register values.
-    pub registers: [u8; 64],
+    pub registers: [u8; TED_REGISTER_COUNT],
     /// Current raster line, including the border.
     pub raster: u16,
     /// Output scanline, separate from the software-writable raster counter.
@@ -55,7 +240,7 @@ impl Default for Ted {
     /// Arguments: none. Returns: a fresh TED state.
     fn default() -> Self {
         Self {
-            registers: [0; 64],
+            registers: [0; TED_REGISTER_COUNT],
             raster: 0,
             display_line: 0,
             line_cycles: 0,
@@ -67,7 +252,7 @@ impl Default for Ted {
             irq_enable: 0,
             reload: [0; 3],
             timer: [0; 3],
-            key_latch: 0xff,
+            key_latch: KEYBOARD_IDLE_VALUE,
         }
     }
 }
@@ -75,7 +260,7 @@ impl Default for Ted {
 /// A complete machine with ROM, RAM, CPU, TED, keyboard, and a virtual drive.
 pub struct Machine {
     /// Physical 64 KiB RAM; smaller models use `ram_mask` mirroring.
-    pub ram: Box<[u8; 65536]>,
+    pub ram: Box<[u8; ADDRESS_SPACE_BYTES]>,
     /// CPU registers.
     pub cpu: Cpu,
     /// Number of successfully executed CPU instructions, for the GUI MIPS meter.
@@ -85,7 +270,7 @@ pub struct Machine {
     /// TED audio oscillator and samples waiting for the desktop audio device.
     sound: sound::Sound,
     /// Four pairs of 16 KiB ROMs, with missing optional banks zero-filled.
-    roms: [Vec<u8>; 8],
+    roms: [Vec<u8>; ROM_IMAGE_COUNT],
     /// Lower ROM bank number.
     low_bank: usize,
     /// Upper ROM bank number.
@@ -99,16 +284,16 @@ pub struct Machine {
     /// FD30 keyboard row select.
     key_port: u8,
     /// Pressed keys in the eight by eight hardware matrix.
-    pub key_matrix: [u8; 8],
+    pub key_matrix: [u8; KEYBOARD_MATRIX_ROWS],
     /// Last rendered full PAL frame as TED color indices.
     pub pixels: Box<[u8; WIDTH * HEIGHT]>,
     /// Mode observed while drawing each raster line.
     pub line_modes: [u8; HEIGHT],
     /// Video matrix base latched at the start of each eight-line character row.
     video_matrix_latch: usize,
-    /// Virtual drive IEC port, status, and handshake flag.
-    iec: [u8; 3],
-    /// IEC command currently being handled.
+    /// Virtual IEC registers: data at FEF0, status at FEF1, handshake at FEF2.
+    iec: [u8; IEC_REGISTER_COUNT],
+    /// Pending command prefix from a FEF0 write (81, 82, or 83).
     iec_command: u8,
     /// Host filename transmitted by the ROM.
     iec_name: Vec<u8>,
@@ -144,14 +329,14 @@ impl Machine {
             "e2lrom.dat",
             "e2hrom.dat",
         ];
-        let mut roms: [Vec<u8>; 8] = std::array::from_fn(|_| vec![0; 16384]);
+        let mut roms: [Vec<u8>; ROM_IMAGE_COUNT] = std::array::from_fn(|_| vec![0; ROM_BANK_BYTES]);
         for (i, name) in names.iter().enumerate() {
             match fs::read(path.as_ref().join(name)) {
-                Ok(data) if data.len() == 16384 => roms[i] = data,
+                Ok(data) if data.len() == ROM_BANK_BYTES => roms[i] = data,
                 Ok(_) => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!("{name} must be 16384 bytes"),
+                        format!("{name} must be {ROM_BANK_BYTES} bytes"),
                     ))
                 }
                 Err(e) if i < 2 => return Err(e),
@@ -159,7 +344,7 @@ impl Machine {
             }
         }
         let mut m = Self {
-            ram: Box::new([0; 65536]),
+            ram: Box::new([0; ADDRESS_SPACE_BYTES]),
             cpu: Cpu::default(),
             instructions_executed: 0,
             ted: Ted::default(),
@@ -168,14 +353,14 @@ impl Machine {
             low_bank: 0,
             high_bank: 0,
             ram_enabled: false,
-            ram_mask: 0xffff,
+            ram_mask: RAM_MASK_64K,
             user_port: 0,
-            key_port: 0xff,
-            key_matrix: [0; 8],
+            key_port: KEYBOARD_IDLE_VALUE,
+            key_matrix: [0; KEYBOARD_MATRIX_ROWS],
             pixels: Box::new([0; WIDTH * HEIGHT]),
             line_modes: [0; HEIGHT],
             video_matrix_latch: 0,
-            iec: [0; 3],
+            iec: [0; IEC_REGISTER_COUNT],
             iec_command: 0,
             iec_name: Vec::new(),
             iec_input: Vec::new(),
@@ -196,14 +381,17 @@ impl Machine {
     pub fn reset(&mut self) {
         self.ted = Ted::default();
         self.sound.reset();
-        self.ted.key_latch = 0xff;
+        self.ted.key_latch = KEYBOARD_IDLE_VALUE;
         self.cpu = Cpu::default();
-        self.cpu.pc = u16::from_le_bytes([self.roms[1][0x3ffc], self.roms[1][0x3ffd]]);
+        self.cpu.pc = u16::from_le_bytes([
+            self.roms[SYSTEM_ROM_IMAGE][SYSTEM_RESET_VECTOR_OFFSET],
+            self.roms[SYSTEM_ROM_IMAGE][SYSTEM_RESET_VECTOR_OFFSET + 1],
+        ]);
         self.low_bank = 0;
         self.high_bank = 0;
         self.ram_enabled = false;
         self.key_matrix.fill(0);
-        self.key_port = 0xff;
+        self.key_port = KEYBOARD_IDLE_VALUE;
         self.video_matrix_latch = 0;
     }
 
@@ -211,9 +399,9 @@ impl Machine {
     /// Arguments: kib is 16, 32, or 64 KiB. Returns: success or an invalid-size error.
     pub fn set_ram_size(&mut self, kib: u16) -> Result<(), &'static str> {
         self.ram_mask = match kib {
-            16 => 0x3fff,
-            32 => 0x7fff,
-            64 => 0xffff,
+            16 => RAM_MASK_16K,
+            32 => RAM_MASK_32K,
+            64 => RAM_MASK_64K,
             _ => return Err("RAM must be 16, 32, or 64 KiB"),
         };
         self.ram.fill(0);
@@ -221,28 +409,35 @@ impl Machine {
         Ok(())
     }
 
-    /// Read CPU-visible memory, honoring ROM banking and I/O.
-    /// Arguments: address is the 16-bit CPU address. Returns: the selected byte.
+    /// Read the CPU's memory map. FD00-FF3F accesses hardware even when RAM
+    /// is selected; lower addresses read RAM, and the upper addresses read
+    /// either RAM or the selected ROM bank. FC00-FFFF outside I/O uses system
+    /// ROM while ROM is enabled, keeping its vectors and entry points visible.
+    /// Arguments: address is the 16-bit CPU address. Returns: the visible byte.
     pub fn read(&mut self, address: u16) -> u8 {
-        if (0xfd00..0xff40).contains(&address) {
+        if (IO_START..IO_END).contains(&address) {
             return self.read_io(address);
         }
-        if address < 0x8000 || self.ram_enabled {
+        if address < LOWER_ROM_START || self.ram_enabled {
             return self.ram[(address & self.ram_mask) as usize];
         }
-        if address < 0xc000 {
-            return self.roms[self.low_bank * 2][(address & 0x3fff) as usize];
+        if address < UPPER_ROM_START {
+            return self.roms[self.low_bank * ROM_IMAGES_PER_BANK]
+                [address as usize & ROM_BANK_MASK];
         }
-        if address < 0xfc00 {
-            return self.roms[self.high_bank * 2 + 1][(address & 0x3fff) as usize];
+        if address < SYSTEM_ROM_START {
+            return self.roms[self.high_bank * ROM_IMAGES_PER_BANK + UPPER_ROM_IMAGE_OFFSET]
+                [address as usize & ROM_BANK_MASK];
         }
-        self.roms[1][(address & 0x3fff) as usize]
+        self.roms[SYSTEM_ROM_IMAGE][address as usize & ROM_BANK_MASK]
     }
 
-    /// Write RAM or a hardware register. Writes beneath ROM remain in RAM.
-    /// Arguments: address is the 16-bit CPU address; value is the byte to store. Returns: nothing.
+    /// Write the CPU's memory map. FD00-FF3F reaches hardware; every other
+    /// address writes physical RAM, including RAM hidden beneath a ROM bank.
+    /// Arguments: address is the 16-bit CPU address and value is the byte.
+    /// Returns: nothing; RAM or the addressed device changes immediately.
     pub fn write(&mut self, address: u16, value: u8) {
-        if (0xfd00..0xff40).contains(&address) {
+        if (IO_START..IO_END).contains(&address) {
             self.write_io(address, value);
         } else {
             self.ram[(address & self.ram_mask) as usize] = value;
@@ -256,7 +451,7 @@ impl Machine {
             return Err("missing PRG address");
         }
         let start = u16::from_le_bytes([data[0], data[1]]) as usize;
-        if start + data.len() - 2 > 65536 {
+        if start + data.len() - 2 > ADDRESS_SPACE_BYTES {
             return Err("PRG exceeds memory");
         }
         self.ram[start..start + data.len() - 2].copy_from_slice(&data[2..]);
@@ -268,18 +463,19 @@ impl Machine {
     /// restores A, X, Y and P, then returns to its saved program counter.
     /// Arguments: data is the complete old-format snapshot. Returns: success or a size error.
     pub fn load_frozen_image(&mut self, data: &[u8]) -> Result<(), &'static str> {
-        if data.len() != 65536 {
+        if data.len() != ADDRESS_SPACE_BYTES {
             return Err("frozen image must be exactly 65536 bytes");
         }
         self.reset();
-        self.ram[2..16384].copy_from_slice(&data[2..16384]);
-        for address in 0xff06..0xff1a {
+        self.ram[2..ROM_BANK_BYTES].copy_from_slice(&data[2..ROM_BANK_BYTES]);
+        for address in TED_PAGE_START + TED_CONTROL_1 as u16..TED_SNAPSHOT_END {
             self.write(address, data[address as usize]);
         }
-        self.write(0xfd30, 0);
-        self.ram[0x7200..0x7207].copy_from_slice(&[0x68, 0xa8, 0x68, 0xaa, 0x68, 0x28, 0x60]);
-        self.cpu.sp = data[0x7ef3];
-        self.cpu.pc = 0x7200;
+        self.write(FD_KEYBOARD_GROUP, 0);
+        self.ram[FROZEN_TRAMPOLINE..FROZEN_TRAMPOLINE + 7]
+            .copy_from_slice(&[0x68, 0xa8, 0x68, 0xaa, 0x68, 0x28, 0x60]);
+        self.cpu.sp = data[FROZEN_STACK_POINTER];
+        self.cpu.pc = FROZEN_TRAMPOLINE as u16;
         Ok(())
     }
 
@@ -304,7 +500,7 @@ impl Machine {
     /// Press or release one C16 matrix key, numbered 0 to 63.
     /// Arguments: index is a key number from 0 to 63; pressed sets or clears it. Returns: nothing; out-of-range indices are ignored.
     pub fn set_key(&mut self, index: u8, pressed: bool) {
-        if index >= 64 {
+        if index >= KEYBOARD_MATRIX_KEYS {
             return;
         }
         let row = (index / 8) as usize;
@@ -374,15 +570,17 @@ impl Machine {
     /// Capture 40 by 25 screen codes as stable, human-readable ASCII text.
     /// Arguments: self is the machine. Returns: 25 newline-separated 40-character rows.
     pub fn capture_text_screen(&self) -> String {
-        let base = ((self.ted.registers[0x14] & 0xf8) as usize) << 8;
-        let full_glyph_set = self.ted.registers[0x07] & 0x80 != 0;
+        let base = ((self.ted.registers[TED_MATRIX_BASE as usize] & 0xf8) as usize) << 8;
+        let full_glyph_set =
+            self.ted.registers[TED_CONTROL_2 as usize] & TED_FULL_GLYPH_SET_BIT != 0;
         let mut out = String::with_capacity(1024);
         for row in 0..25 {
             if row != 0 {
                 out.push('\n');
             }
             for col in 0..40 {
-                let code = self.ram[(base + 0x400 + row * 40 + col) & self.ram_mask as usize];
+                let code =
+                    self.ram[(base + SCREEN_CODE_OFFSET + row * 40 + col) & self.ram_mask as usize];
                 out.push(screen_code_to_char(code, full_glyph_set));
             }
         }
@@ -449,7 +647,7 @@ impl Machine {
     /// Arguments: self receives only screen-memory writes. Returns: nothing.
     /// The current TED character-set selection determines which 128 glyphs appear.
     pub fn write_glyph_table_to_screen(&mut self) {
-        let screen = &mut self.ram[0x0c00..0x0fe8];
+        let screen = &mut self.ram[DEFAULT_SCREEN_RAM..FREE_BASIC_RAM_START];
         screen.fill(0x20);
 
         let title = b"ROM GLYPHS 00-7F";
@@ -516,7 +714,8 @@ impl Machine {
             // TED normally lets the CPU run at double clock speed outside
             // the picture. The short slow region in a border line accounts
             // for its fixed bus use; the longer one models display fetches.
-            let visible = self.ted.registers[6] & 0x10 != 0 && (3..203).contains(&self.ted.raster);
+            let visible = self.ted.registers[TED_CONTROL_1 as usize] & TED_SCREEN_ENABLE_BIT != 0
+                && (3..203).contains(&self.ted.raster);
             let slow = if visible {
                 (8..106).contains(&self.ted.line_cycles)
             } else {
@@ -567,7 +766,7 @@ impl Machine {
             }
         }
         if self.ted.irq & self.ted.irq_enable != 0 {
-            self.ted.irq |= 0x80;
+            self.ted.irq |= TED_IRQ_MASTER_BIT;
             if self.cpu.p & 4 == 0 {
                 self.irq_cpu();
             }
@@ -581,7 +780,7 @@ impl Machine {
     /// Arguments: joystick_select has active-low port selection bits. Returns: nothing; FF08 latch changes.
     fn scan_keyboard(&mut self, joystick_select: u8) {
         let mut keys = 0;
-        for row in 0..8 {
+        for row in 0..KEYBOARD_MATRIX_ROWS {
             if self.key_port & (1 << row) == 0 {
                 keys |= self.key_matrix[row];
             }
@@ -589,108 +788,120 @@ impl Machine {
         // The port signals share keyboard-matrix bit positions. Joy 1 uses
         // 5/R/D/6/T; Joy 2 uses 3/W/A/4/Shift. Bit 2 means left and bit 3
         // means right, regardless of the old README's swapped directions.
-        if joystick_select & 0x04 == 0 {
-            let row = self.key_matrix[2];
-            keys |= row & 0x0f; // up, down, left, right
-            keys |= row & 0x40; // fire
+        if joystick_select & JOYSTICK_1_SELECT_BIT == 0 {
+            let row = self.key_matrix[JOYSTICK_1_MATRIX_ROW];
+            keys |= row & JOYSTICK_DIRECTION_BITS; // up, down, left, right
+            keys |= row & JOYSTICK_1_FIRE_BIT; // fire
         }
-        if joystick_select & 0x02 == 0 {
-            let row = self.key_matrix[1];
-            keys |= row & 0x8f; // four directions and Shift/fire
+        if joystick_select & JOYSTICK_2_SELECT_BIT == 0 {
+            let row = self.key_matrix[JOYSTICK_2_MATRIX_ROW];
+            keys |= row & JOYSTICK_2_BITS; // four directions and Shift/fire
         }
         self.ted.key_latch = !keys;
     }
 
-    /// Read a memory-mapped device register.
-    /// Arguments: address is a mapped CPU address. Returns: register value.
+    /// Dispatch a CPU read in FD00-FF3F to the addressed device. The IEC
+    /// registers live at FEF0-FEF2; TED registers occupy FF00-FF3F.
+    /// Arguments: address is the full mapped CPU address. Returns: its device
+    /// value, or the fixed legacy value for unimplemented FD/FE registers.
     fn read_io(&mut self, address: u16) -> u8 {
-        if address >= 0xff00 {
-            return self.read_ted((address & 63) as u8);
+        if address >= TED_PAGE_START {
+            return self.read_ted((address & TED_REGISTER_MASK) as u8);
         }
-        if address >= 0xfe00 {
-            return match address & 255 {
-                0xf0 => self.iec[0],
-                0xf1 => self.iec[1],
-                0xf2 => self.iec[2],
-                _ => 0,
-            };
+        if address >= IEC_PAGE_START {
+            return self.read_iec((address & IO_PAGE_OFFSET_MASK) as u8);
         }
-        match address & 0xf0 {
-            0x00 => 0xac,
-            0x10 => self.user_port,
-            0x30 => self.key_port,
-            _ => 0x66,
+        match address & FD_GROUP_MASK {
+            FD_DEVICE_GROUP => FD_DEVICE_RESPONSE,
+            FD_USER_PORT_GROUP => self.user_port,
+            FD_KEYBOARD_GROUP => self.key_port,
+            _ => FD_UNMAPPED_RESPONSE,
         }
     }
 
-    /// Write a memory-mapped device register.
-    /// Arguments: address is a mapped CPU address; value is the written byte. Returns: nothing.
+    /// Dispatch a CPU write in FD00-FF3F to TED, virtual IEC, keyboard,
+    /// user port, or ROM-bank selection. FDD0-FDDF selects the two ROM banks.
+    /// Arguments: address is the full mapped CPU address and value is written.
+    /// Returns: nothing; the selected device state changes immediately.
     fn write_io(&mut self, address: u16, value: u8) {
-        if address >= 0xff00 {
-            self.write_ted((address & 63) as u8, value);
+        if address >= TED_PAGE_START {
+            self.write_ted((address & TED_REGISTER_MASK) as u8, value);
             return;
         }
-        if address >= 0xfe00 {
-            self.write_iec((address & 255) as u8, value);
+        if address >= IEC_PAGE_START {
+            self.write_iec((address & IO_PAGE_OFFSET_MASK) as u8, value);
             return;
         }
-        match address & 0xf0 {
-            0x10 => self.user_port = value,
-            0x30 => self.key_port = value,
-            0xd0 => {
-                self.low_bank = (address & 3) as usize;
-                self.high_bank = ((address >> 2) & 3) as usize;
+        match address & FD_GROUP_MASK {
+            FD_USER_PORT_GROUP => self.user_port = value,
+            FD_KEYBOARD_GROUP => self.key_port = value,
+            FD_ROM_BANK_GROUP => {
+                // FDD0-FDDF encodes independent 16 KiB lower/upper ROM banks.
+                self.low_bank = (address & LOWER_BANK_SELECT_MASK) as usize;
+                self.high_bank =
+                    ((address >> UPPER_BANK_SELECT_SHIFT) & LOWER_BANK_SELECT_MASK) as usize;
             }
             _ => {}
         }
     }
 
-    /// Read an implemented TED register or its write-back value.
-    /// Arguments: reg is the TED register index. Returns: register value.
+    /// Read a TED register through FF00-FF3F. Timers, keyboard, interrupts,
+    /// and the raster counter have live values; other addresses return their
+    /// most recently written register byte.
+    /// Arguments: reg is the six-bit TED register index. Returns: its byte.
     fn read_ted(&self, reg: u8) -> u8 {
         let r = reg as usize;
         match reg {
-            0x00..=0x05 => (self.ted.timer[r / 2] >> ((r % 2) * 8)) as u8,
-            0x08 => self.ted.key_latch,
-            0x09 => self.ted.irq,
-            0x0a => self.ted.irq_enable | (self.ted.irq_line >> 8) as u8,
-            0x0b => self.ted.irq_line as u8,
-            0x1c => (self.ted.raster >> 8) as u8,
-            0x1d => self.ted.raster as u8,
-            0x1e => (self.ted.line_cycles / 2) as u8,
+            // Each pair is the low/high byte of one of the three timers.
+            TED_TIMER_FIRST..=TED_TIMER_LAST => (self.ted.timer[r / 2] >> ((r % 2) * 8)) as u8,
+            TED_KEYBOARD_LATCH => self.ted.key_latch,
+            TED_IRQ_STATUS => self.ted.irq,
+            TED_IRQ_CONTROL => self.ted.irq_enable | (self.ted.irq_line >> 8) as u8,
+            TED_IRQ_LINE => self.ted.irq_line as u8,
+            TED_RASTER_HIGH => (self.ted.raster >> 8) as u8,
+            TED_RASTER_LOW => self.ted.raster as u8,
+            TED_LINE_POSITION => (self.ted.line_cycles / 2) as u8,
             _ => self.ted.registers[r],
         }
     }
 
-    /// Apply a TED write immediately. The next completed raster line sees
-    /// the new mode, supporting BASIC's bitmap/text split screen.
-    /// Arguments: reg is the TED register index; value is the written byte. Returns: nothing.
+    /// Apply a TED register write at FF00-FF3F. Mode and color writes affect
+    /// subsequent raster lines, timers reload, keyboard scans latch results,
+    /// and FF3E/FF3F switch ROM visibility for CPU memory reads.
+    /// Arguments: reg is the six-bit TED register index and value is written.
+    /// Returns: nothing; device state changes before the next CPU instruction.
     fn write_ted(&mut self, reg: u8, value: u8) {
         let r = reg as usize;
         self.ted.registers[r] = value;
         match reg {
-            0x00..=0x05 => {
+            TED_TIMER_FIRST..=TED_TIMER_LAST => {
+                // Each timer has low and high registers. Writing either half
+                // changes its reload value and restarts its current count.
                 let timer = &mut self.ted.reload[r / 2];
                 if r & 1 == 0 {
                     *timer = (*timer & 0xff00) | value as u16;
                 } else {
-                    *timer = (*timer & 255) | ((value as u16) << 8);
+                    *timer = (*timer & TED_RASTER_LOW_MASK) | ((value as u16) << 8);
                 }
                 self.ted.timer[r / 2] = *timer;
             }
-            0x08 => self.scan_keyboard(value),
-            0x09 => {
-                self.ted.irq &= !(value & 0x7f);
-                if self.ted.irq & 0x7f == 0 {
-                    self.ted.irq &= 0x7f;
+            TED_KEYBOARD_LATCH => self.scan_keyboard(value),
+            TED_IRQ_STATUS => {
+                // Writing one bits clears the corresponding pending IRQs.
+                self.ted.irq &= !(value & TED_IRQ_PENDING_MASK);
+                if self.ted.irq & TED_IRQ_PENDING_MASK == 0 {
+                    self.ted.irq &= TED_IRQ_PENDING_MASK;
                 }
             }
-            0x0a => {
-                self.ted.irq_enable = value & 0x5e;
-                self.ted.irq_line = (self.ted.irq_line & 255) | (((value & 1) as u16) << 8);
+            TED_IRQ_CONTROL => {
+                // IRQ enable bits share a register with raster line bit 8.
+                self.ted.irq_enable = value & TED_IRQ_ENABLE_MASK;
+                self.ted.irq_line =
+                    (self.ted.irq_line & TED_RASTER_LOW_MASK) | (((value & 1) as u16) << 8);
             }
-            0x0b => {
-                self.ted.irq_line = (self.ted.irq_line & 0x100) | value as u16;
+            TED_IRQ_LINE => {
+                // Raster line bits 0..7 select the next IRQ compare line.
+                self.ted.irq_line = (self.ted.irq_line & TED_RASTER_HIGH_BIT) | value as u16;
                 // TED compares against the current line as well as at line
                 // boundaries. TOM arms the next raster IRQ after entering
                 // that line; a boundary-only check misses every second IRQ.
@@ -698,72 +909,113 @@ impl Machine {
                     self.ted.irq |= 2;
                 }
             }
-            0x1c => self.ted.raster = (self.ted.raster & 255) | (((value & 1) as u16) << 8),
-            0x1d => self.ted.raster = (self.ted.raster & 0x100) | value as u16,
-            0x3e => self.ram_enabled = false,
-            0x3f => self.ram_enabled = true,
+            TED_RASTER_HIGH => {
+                self.ted.raster =
+                    (self.ted.raster & TED_RASTER_LOW_MASK) | (((value & 1) as u16) << 8)
+            }
+            TED_RASTER_LOW => {
+                self.ted.raster = (self.ted.raster & TED_RASTER_HIGH_BIT) | value as u16
+            }
+            TED_SHOW_ROM => self.ram_enabled = false,
+            TED_SHOW_RAM => self.ram_enabled = true,
             _ => {}
         }
     }
 
-    /// Implement the original virtual drive's IEC command protocol.
-    /// Arguments: reg is the IEC register index; value is the command/data byte. Returns: nothing.
+    /// Read a virtual IEC register after a ROM command. FEF0 exposes the byte
+    /// prepared by an 84 read request during DLOAD; FEF1 reports transfer or
+    /// file status (0 success, 1 save error, 2 load error, 3 final read byte);
+    /// FEF2 is the ROM's handshake flag. Other FE registers read as zero.
+    /// Arguments: reg is the low byte of the FE-page address. Returns: its byte.
+    fn read_iec(&self, reg: u8) -> u8 {
+        match reg {
+            IEC_DATA_REGISTER => self.iec[IEC_DATA_INDEX],
+            IEC_STATUS_REGISTER => self.iec[IEC_STATUS_INDEX],
+            IEC_HANDSHAKE_REGISTER => self.iec[IEC_HANDSHAKE_INDEX],
+            _ => 0,
+        }
+    }
+
+    /// Accept the ROM's virtual IEC command/data writes at FEF0 and FEF2.
+    /// This is the original emulator's register-level shortcut for DLOAD and
+    /// DSAVE, rather than a bit-timed serial IEC bus. Prefix 82 selects an
+    /// OPEN/CLOSE phase, 83 sends one filename or save-data byte, 84 requests
+    /// the next load byte, and 81 consumes a ROM framing byte.
+    /// Arguments: reg is the low byte of the FE-page address; value is the ROM
+    /// command or payload byte. Returns: nothing; IEC data/status may change.
     fn write_iec(&mut self, reg: u8, value: u8) {
-        if reg == 0xf2 {
-            self.iec[2] = if value == 0 { 255 } else { 0 };
+        if reg == IEC_HANDSHAKE_REGISTER {
+            // The ROM writes zero to acknowledge a transfer and reads FEF2
+            // back as FF; a nonzero write clears that acknowledgement.
+            self.iec[IEC_HANDSHAKE_INDEX] = if value == 0 { IEC_HANDSHAKE_ACK } else { 0 };
             return;
         }
-        if reg != 0xf0 {
+        if reg != IEC_DATA_REGISTER {
+            // Only FEF0 carries commands/data; other FE-page writes are idle.
             return;
         }
-        self.iec[2] = 0;
+        // Every FEF0 write clears the handshake until the ROM acknowledges it.
+        self.iec[IEC_HANDSHAKE_INDEX] = 0;
         match self.iec_command {
-            0x82 => {
-                if value & 0xf0 == 0xf0 {
+            IEC_SECONDARY_COMMAND => {
+                if value & IEC_SECONDARY_MASK == IEC_NAME_SECONDARY {
+                    // Secondary address F*: begin a new filename. Subsequent
+                    // 83-prefixed bytes form the DLOAD/DSAVE path.
                     self.iec_name.clear();
                     self.iec_naming = true;
-                } else if value & 0xf0 == 0xe0 {
+                } else if value & IEC_SECONDARY_MASK == IEC_CLOSE_SECONDARY {
+                    // Secondary address E*: close the file. DSAVE writes its
+                    // accumulated bytes here, so a failed host write appears
+                    // as status 1; dry-run reports success without a write.
                     self.iec_naming = false;
                     if self.iec_writing {
                         if let Some(path) = self.iec_path() {
-                            self.iec[1] =
+                            self.iec[IEC_STATUS_INDEX] =
                                 if self.iec_dry_run || fs::write(path, &self.iec_output).is_ok() {
-                                    0
+                                    IEC_STATUS_OK
                                 } else {
-                                    1
+                                    IEC_STATUS_SAVE_ERROR
                                 };
                         } else {
-                            self.iec[1] = 1;
+                            self.iec[IEC_STATUS_INDEX] = IEC_STATUS_SAVE_ERROR;
                         }
                     }
                     self.iec_writing = false;
                 } else {
+                    // Any other secondary address opens the named file. Low
+                    // nibble zero means DLOAD/read; nonzero means DSAVE/write.
                     self.iec_naming = false;
-                    if value & 15 == 0 {
+                    if value & IEC_CHANNEL_MASK == 0 {
                         self.iec_writing = false;
                         if self.verbose {
                             eprintln!("IEC load {:?}", self.iec_path());
                         }
                         match self.iec_path().map(fs::read) {
                             Some(Ok(data)) => {
+                                // Keep bytes in memory for later 84 read
+                                // requests; the ROM interprets their format.
                                 self.iec_input = data;
                                 self.iec_position = 0;
-                                self.iec[1] = 0;
+                                self.iec[IEC_STATUS_INDEX] = IEC_STATUS_OK;
                             }
-                            _ => self.iec[1] = 2,
+                            _ => self.iec[IEC_STATUS_INDEX] = IEC_STATUS_LOAD_ERROR,
                         }
                     } else {
+                        // A DSAVE starts a fresh output buffer. Nothing is
+                        // written to the host until the E* close command.
                         self.iec_writing = true;
                         if self.verbose {
                             eprintln!("IEC save {:?}", self.iec_path());
                         }
                         self.iec_output.clear();
-                        self.iec[1] = 0;
+                        self.iec[IEC_STATUS_INDEX] = IEC_STATUS_OK;
                     }
                 }
                 self.iec_command = 0;
             }
-            0x83 => {
+            IEC_SEND_BYTE_COMMAND => {
+                // Each 83 prefix contributes exactly one byte. During the
+                // F* phase it extends the name; during DSAVE it extends data.
                 if self.iec_naming {
                     self.iec_name.push(value);
                 } else {
@@ -772,28 +1024,36 @@ impl Machine {
                 // The ROM sends a new 0x83 prefix before every data byte.
                 self.iec_command = 0;
             }
-            0x81 => self.iec_command = 0,
+            IEC_FRAMING_COMMAND => self.iec_command = 0,
             _ => match value {
-                0x81..=0x83 => self.iec_command = value,
-                0x84 => {
-                    self.iec[0] = *self.iec_input.get(self.iec_position).unwrap_or(&0);
+                // Arm a prefix; the following FEF0 byte is its argument.
+                IEC_FRAMING_COMMAND..=IEC_SEND_BYTE_COMMAND => self.iec_command = value,
+                IEC_READ_BYTE_COMMAND => {
+                    // DLOAD asks for one byte. FEF0 returns it, while FEF1
+                    // becomes 3 on the last byte and 0 before that.
+                    self.iec[IEC_DATA_INDEX] = *self.iec_input.get(self.iec_position).unwrap_or(&0);
                     self.iec_position += 1;
-                    self.iec[1] = if self.iec_position >= self.iec_input.len() {
-                        3
+                    self.iec[IEC_STATUS_INDEX] = if self.iec_position >= self.iec_input.len() {
+                        IEC_STATUS_LAST_BYTE
                     } else {
-                        0
+                        IEC_STATUS_OK
                     };
                 }
                 _ => {
-                    self.iec[0] = value;
-                    self.iec[1] = 0;
+                    // Other control bytes remain visible to the ROM as data;
+                    // the virtual drive reports no transfer error for them.
+                    self.iec[IEC_DATA_INDEX] = value;
+                    self.iec[IEC_STATUS_INDEX] = IEC_STATUS_OK;
                 }
             },
         }
     }
 
-    /// Resolve an IEC filename inside the configured virtual drive directory.
-    /// Arguments: self contains the IEC filename and drive directory. Returns: safe host path or None for an invalid name.
+    /// Resolve the DLOAD/DSAVE filename in the configured host directory.
+    /// The part after the last colon is the host-relative name; absolute or
+    /// parent components are rejected so a ROM command cannot escape it.
+    /// Arguments: the name accumulated through 83 writes is read from self.
+    /// Returns: a confined host path, or None for an invalid name.
     fn iec_path(&self) -> Option<PathBuf> {
         let name = String::from_utf8_lossy(&self.iec_name);
         let name = name.rsplit(':').next().unwrap_or(&name);

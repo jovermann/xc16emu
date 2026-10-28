@@ -7,7 +7,7 @@
 //! mode changes. Audio samples are collected independently of the GUI so the
 //! chip can be tested without opening an output device.
 
-use crate::PAL_TED_TICKS_PER_SECOND;
+use crate::{memory_map::*, PAL_TED_TICKS_PER_SECOND};
 
 /// TED advances 114 half-speed ticks on each PAL line, 50 times per second.
 const TED_TICKS_HZ: u64 = PAL_TED_TICKS_PER_SECOND;
@@ -65,7 +65,7 @@ impl Sound {
 
     /// Advance the sound clock with elapsed TED ticks.
     /// Arguments: cycles is elapsed TED ticks; registers are the current TED register image. Returns: nothing; samples may be appended.
-    pub(crate) fn advance(&mut self, cycles: u8, registers: &[u8; 64]) {
+    pub(crate) fn advance(&mut self, cycles: u8, registers: &[u8; TED_REGISTER_COUNT]) {
         if self.sample_rate == 0 {
             return;
         }
@@ -85,10 +85,12 @@ impl Sound {
 
     /// Mix the two TED voices or direct volume DAC.
     /// Arguments: elapsed_cycles is TED ticks since the prior sample; r contains TED registers. Returns: one normalized mono sample.
-    fn render_sample(&mut self, elapsed_cycles: u32, r: &[u8; 64]) -> f32 {
+    fn render_sample(&mut self, elapsed_cycles: u32, r: &[u8; TED_REGISTER_COUNT]) -> f32 {
         let freqs = [
-            u16::from(r[0x0e]) | (u16::from(r[0x12] & 3) << 8),
-            u16::from(r[0x0f]) | (u16::from(r[0x10] & 3) << 8),
+            u16::from(r[TED_TONE_1_LOW as usize])
+                | (u16::from(r[TED_BITMAP_AND_TONE_1_HIGH as usize] & 3) << 8),
+            u16::from(r[TED_TONE_2_LOW as usize])
+                | (u16::from(r[TED_TONE_2_HIGH as usize] & 3) << 8),
         ];
         let mut tone = [0.0f32; 2];
         for voice in 0..2 {
@@ -120,7 +122,7 @@ impl Sound {
                 }
             }
         }
-        let control = r[0x11];
+        let control = r[TED_SOUND_CONTROL as usize];
         if control & 0x80 != 0 {
             // Bit 7 switches to the TED's direct volume DAC. Programs can
             // write successive volume values to play digital samples.

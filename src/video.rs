@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 //! TED scan-line renderer. Register changes take effect between individual lines.
 
-use crate::Machine;
+use crate::{memory_map::*, Machine};
 
 /// Width of the PAL frame including the emulator's border.
 pub const WIDTH: usize = 432;
@@ -34,12 +34,12 @@ impl Machine {
         if !rom {
             return self.video_ram(address);
         }
-        let bank = if address & 0xc000 == 0xc000 {
-            self.high_bank * 2 + 1
+        let bank = if address & UPPER_ROM_START as usize == UPPER_ROM_START as usize {
+            self.high_bank * ROM_IMAGES_PER_BANK + UPPER_ROM_IMAGE_OFFSET
         } else {
-            self.low_bank * 2
+            self.low_bank * ROM_IMAGES_PER_BANK
         };
-        self.roms[bank][address & 0x3fff]
+        self.roms[bank][address & ROM_BANK_MASK]
     }
 
     /// Render one PAL raster line into the persistent frame buffer.
@@ -56,13 +56,13 @@ impl Machine {
         // advances to the next physical row of the output frame.
         let row = (display_line as usize + Y_OFFSET) % HEIGHT;
         let start = row * WIDTH;
-        let con1 = self.ted.registers[6];
-        let con2 = self.ted.registers[7];
-        let background = self.ted.registers[0x15] & 0x7f;
-        let border = self.ted.registers[0x19] & 0x7f;
+        let con1 = self.ted.registers[TED_CONTROL_1 as usize];
+        let con2 = self.ted.registers[TED_CONTROL_2 as usize];
+        let background = self.ted.registers[TED_BACKGROUND_COLOR as usize] & TED_COLOR_VALUE_MASK;
+        let border = self.ted.registers[TED_BORDER_COLOR as usize] & TED_COLOR_VALUE_MASK;
         self.line_modes[row] = con1;
         self.pixels[start..start + WIDTH].fill(border);
-        if !(3..203).contains(&line) || con1 & 0x10 == 0 {
+        if !(3..203).contains(&line) || con1 & TED_SCREEN_ENABLE_BIT == 0 {
             return;
         }
         if con1 & 8 == 0 && !(7..199).contains(&line) {
@@ -76,31 +76,42 @@ impl Machine {
         let d = d as usize;
         // TED fetches a screen matrix address once per character row.
         if d & 7 == 0 {
-            self.video_matrix_latch = (self.ted.registers[0x14] as usize & 0xf8) << 8;
+            self.video_matrix_latch =
+                (self.ted.registers[TED_MATRIX_BASE as usize] as usize & 0xf8) << 8;
         }
         let matrix = self.video_matrix_latch;
-        let char_base = (self.ted.registers[0x13] as usize & 0xfc) << 8;
-        let bitmap_base = (self.ted.registers[0x12] as usize & 0x38) << 10;
-        let rom_chars = self.ted.registers[0x12] & 4 != 0 && char_base >= 0x8000;
-        let rom_bitmap = self.ted.registers[0x12] & 4 != 0 && bitmap_base >= 0x8000;
+        let char_base = (self.ted.registers[TED_CHARACTER_BASE as usize] as usize & 0xfc) << 8;
+        let bitmap_base =
+            (self.ted.registers[TED_BITMAP_AND_TONE_1_HIGH as usize] as usize & 0x38) << 10;
+        let rom_chars =
+            self.ted.registers[TED_BITMAP_AND_TONE_1_HIGH as usize] & TED_ROM_PATTERN_BIT != 0
+                && char_base >= LOWER_ROM_START as usize;
+        let rom_bitmap =
+            self.ted.registers[TED_BITMAP_AND_TONE_1_HIGH as usize] & TED_ROM_PATTERN_BIT != 0
+                && bitmap_base >= LOWER_ROM_START as usize;
         let multicolor = con2 & 0x10 != 0;
-        let bitmap = con1 & 0x20 != 0;
-        let extended = con1 & 0x40 != 0;
+        let bitmap = con1 & TED_BITMAP_MODE_BIT != 0;
+        let extended = con1 & TED_EXTENDED_MODE_BIT != 0;
         let x_scroll = (con2 & 7) as usize;
         let char_row = d / 8;
 
         for col in 0..40 {
             let cell = char_row * 40 + col;
             let color = self.video_ram(matrix + cell);
-            let code = self.video_ram(matrix + 0x400 + cell);
+            let code = self.video_ram(matrix + SCREEN_CODE_OFFSET + cell);
             let (pattern, colors, double_pixel) = if bitmap {
                 let address = bitmap_base + char_row * 320 + col * 8 + d % 8;
                 let pattern = self.video_bank(address, rom_bitmap);
                 let c0 = (code & 15) | (color & 0x70);
-                let c1 = ((code >> 4) | (color << 4)) & 0x7f;
+                let c1 = ((code >> 4) | (color << 4)) & TED_COLOR_VALUE_MASK;
                 (
                     pattern,
-                    [background, c1, c0, self.ted.registers[0x16]],
+                    [
+                        background,
+                        c1,
+                        c0,
+                        self.ted.registers[TED_EXTRA_COLOR_1 as usize],
+                    ],
                     multicolor,
                 )
             } else {
@@ -109,18 +120,23 @@ impl Machine {
                 // 128. TOM switches this bit at the raster split.
                 let glyph = if extended {
                     code & 0x3f
-                } else if con2 & 0x80 != 0 {
+                } else if con2 & TED_FULL_GLYPH_SET_BIT != 0 {
                     code
                 } else {
-                    code & 0x7f
+                    code & TED_COLOR_VALUE_MASK
                 };
                 let address = char_base + glyph as usize * 8 + d % 8;
                 let mut pattern = self.video_bank(address, rom_chars);
-                if !multicolor && !extended && code & 0x80 != 0 && con2 & 0x80 == 0 {
+                if !multicolor
+                    && !extended
+                    && code & 0x80 != 0
+                    && con2 & TED_FULL_GLYPH_SET_BIT == 0
+                {
                     pattern = !pattern;
                 }
                 if self.ted.frames & 16 != 0
-                    && self.ted.registers[0x0c] as usize * 256 + self.ted.registers[0x0d] as usize
+                    && self.ted.registers[TED_CURSOR_HIGH as usize] as usize * 256
+                        + self.ted.registers[TED_CURSOR_LOW as usize] as usize
                         == cell
                 {
                     pattern = !pattern;
@@ -128,9 +144,9 @@ impl Machine {
                 if extended {
                     let backgrounds = [
                         background,
-                        self.ted.registers[0x16],
-                        self.ted.registers[0x17],
-                        self.ted.registers[0x18],
+                        self.ted.registers[TED_EXTRA_COLOR_1 as usize],
+                        self.ted.registers[TED_EXTRA_COLOR_2 as usize],
+                        self.ted.registers[TED_EXTRA_COLOR_3 as usize],
                     ];
                     (
                         pattern,
@@ -140,7 +156,12 @@ impl Machine {
                 } else {
                     (
                         pattern,
-                        [background, color, self.ted.registers[0x17], color],
+                        [
+                            background,
+                            color,
+                            self.ted.registers[TED_EXTRA_COLOR_2 as usize],
+                            color,
+                        ],
                         multicolor && color & 8 != 0,
                     )
                 }
@@ -153,7 +174,7 @@ impl Machine {
                     colors[1]
                 } else {
                     colors[0]
-                } & 0x7f;
+                } & TED_COLOR_VALUE_MASK;
                 let x = X_OFFSET + x_scroll + col * 8 + pixel;
                 if x < X_OFFSET + 320 {
                     self.pixels[start + x] = color_index;

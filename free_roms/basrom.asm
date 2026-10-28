@@ -2,7 +2,9 @@
 ; SPDX-License-Identifier: BSL-1.0
 ;
 ; Independently written BASIC subset with a packed numbered-program area.
-; Program RAM is $1200-$3fff, a safe common range on 16/32/64 KiB machines.
+; Program RAM begins at $0FE8 and ends before $4000, $8000, or $FD00,
+; according to the installed 16, 32, or 64 KiB RAM. A low-RAM reader lets
+; the ROM inspect program records beneath the BASIC and system ROM overlays.
 
         ASS $8000
 
@@ -10,8 +12,8 @@ api_line JMP entry             ; $8000: submit the input buffer
 api_init JMP initprogram       ; $8003: clear program/variables on reset
 api_free JMP freeprint         ; $8006: print measured available bytes
 
-input   EQU $1000               ; zero-terminated line from sysrom
-vars    EQU $1100               ; 26 little-endian integer variables
+input   EQU $0200               ; zero-terminated line from sysrom
+vars    EQU $0280               ; 26 little-endian integer variables
 pos     EQU $30                 ; current input byte index
 vallo   EQU $31                 ; current expression result
 valhi   EQU $32
@@ -60,6 +62,9 @@ minhi   EQU $5d
 maxlo   EQU $5e                 ; LIST upper line bound
 maxhi   EQU $5f
 storedline EQU $60            ; tell sysrom that a numbered line needs no READY
+memlimhi EQU $61               ; exclusive program limit: $40/$80/$FD
+rampeek_ptr EQU $0700          ; copied reader for (ptrlo),Y beneath ROM
+rampeek_src EQU $0709          ; copied reader for (srclo),Y beneath ROM
 
 putchar EQU $c800
 printz  EQU $c803
@@ -167,9 +172,9 @@ execute JSR checkbreak
         BNE .runnow
         JMP syntax
 .runfromstart
-        LDA #0
+        LDA #$e8
         STA ptrlo
-        LDA #$12
+        LDA #$0f
         STA ptrhi
 .runnow
         JSR runprogram
@@ -769,10 +774,44 @@ atom    JSR spaces
 
 ; Clear the packed program and numeric variables when the machine resets.
 initprogram
-        LDA #$00
+        ; Copy position-independent readers below the program area. They must
+        ; execute in RAM while $FF3F hides both ROMs, then re-enable ROM before
+        ; returning to this interpreter. A direct ROM-resident read cannot do
+        ; that because the next instruction would disappear with the ROM.
+        LDX #rampeek_code_end-rampeek_code_ptr-1
+.copyreader
+        LDA rampeek_code_ptr,X
+        STA rampeek_ptr,X
+        DEX
+        BPL .copyreader
+
+        ; Probe RAM mirroring with known bytes; reset discards the old program.
+        ; $BFF0 aliases $3FF0 on 16/32 KiB machines; $7FF0 also aliases it
+        ; on 16 KiB machines. Writes reach RAM beneath the BASIC ROM.
+        LDA #$11
+        STA $3ff0
+        LDA #$22
+        STA $7ff0
+        LDA #$33
+        STA $bff0
+        LDA $3ff0
+        CMP #$33
+        BNE .ram64
+        LDA $7ff0
+        CMP #$33
+        BEQ .ram16
+        LDA #$80
+        BNE .setlimit
+.ram16  LDA #$40
+        BNE .setlimit
+.ram64  LDA #$fd
+.setlimit
+        STA memlimhi
+        LDA #$e8
         STA endlo
+        LDA #$00
         STA runmode
-        LDA #$12
+        LDA #$0f
         STA endhi
         JMP clearvars
 clearvars
@@ -784,13 +823,13 @@ clearvars
         BPL .initvars
         RTS
 
-; Print the actual number of free bytes from program end to $4000.
+; Print the actual number of free bytes up to the detected physical RAM limit.
 freeprint
         SEC
         LDA #$00
         SBC endlo
         STA vallo
-        LDA #$40
+        LDA memlimhi
         SBC endhi
         STA valhi
         JMP printnum
@@ -798,10 +837,11 @@ freeprint
 ; Find the first record at or after linelo:linehi in ascending line order.
 ; Return ptr at the record (or end) and found=1 only for an exact match.
 findline
-        LDA #$00
+        LDA #$e8
         STA ptrlo
+        LDA #$00
         STA found
-        LDA #$12
+        LDA #$0f
         STA ptrhi
 .findmore
         LDA ptrhi
@@ -812,12 +852,12 @@ findline
         BEQ .finddone
 .findrecord
         LDY #1
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CMP linehi
         BCC .findadvance
         BNE .finddone
         DEY
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CMP linelo
         BCC .findadvance
         BNE .finddone
@@ -832,7 +872,7 @@ findline
 ; Advance ptr by the size byte at record offset two plus its header.
 advanceptr
         LDY #2
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CLC
         ADC #3
         CLC
@@ -875,7 +915,7 @@ storeline
         LDA found
         BEQ .capacity
         LDY #2
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CLC
         ADC #3
         STA count
@@ -888,7 +928,7 @@ storeline
         STA newhi
 .capacity
         LDA newhi
-        CMP #$40
+        CMP memlimhi
         BCC .room
         BNE .outofmemory
         LDA newlo
@@ -914,7 +954,7 @@ storeline
 ; Close the gap occupied by ptr's record, moving following bytes forward.
 deleteline
         LDY #2
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CLC
         ADC #3
         CLC
@@ -936,7 +976,7 @@ deleteline
         BEQ .deleted
 .deletebyte
         LDY #0
-        LDA (srclo),Y
+        JSR rampeek_src
         STA (dstlo),Y
         INC srclo
         BNE .deletedst
@@ -982,7 +1022,7 @@ insertline
 .insertdstdec
         DEC dstlo
         LDY #0
-        LDA (srclo),Y
+        JSR rampeek_src
         STA (dstlo),Y
         JMP .insertmove
 .insertheader
@@ -1056,9 +1096,9 @@ listprogram
         LDA valhi
         STA maxhi
 .liststart
-        LDA #$00
+        LDA #$e8
         STA ptrlo
-        LDA #$12
+        LDA #$0f
         STA ptrhi
 .listmore
         LDA ptrhi
@@ -1069,31 +1109,31 @@ listprogram
         BEQ .listdone
 .listrecord
         LDY #1
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CMP minhi
         BCC .listskip
         BNE .listupper
         DEY
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CMP minlo
         BCC .listskip
 .listupper
         LDY #1
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CMP maxhi
         BCC .listprint
         BNE .listdone
         DEY
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CMP maxlo
         BCC .listprint
         BNE .listdone
 .listprint
         LDY #0
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         STA vallo
         INY
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         STA valhi
         JSR printnum
         LDA #32
@@ -1106,11 +1146,11 @@ listprogram
         SBC #3
         STA digit
         LDY #2
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         CMP digit
         BEQ .listendline
         LDY count
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         JSR putchar
         INC count
         LDA count
@@ -1151,14 +1191,14 @@ runprogram_keepvars
         LDA runhi
         STA ptrhi
         LDY #2
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         STA count
         LDX #0
         LDY #3
 .runcopy
         CPX count
         BEQ .runcopied
-        LDA (ptrlo),Y
+        JSR rampeek_ptr
         STA input,X
         INX
         INY
@@ -1205,6 +1245,22 @@ runprogram_keepvars
         LDA #0
         STA runmode
         RTS
+
+; Relocatable machine code copied to $0700 at reset. Every instruction must
+; remain valid at that RAM address; no ROM call or absolute self-reference is
+; allowed while the RAM bank is visible. Both routines preserve X and Y, and
+; return the addressed RAM byte in A with its zero/negative flags intact.
+rampeek_code_ptr
+        STA $ff3f               ; show RAM beneath both ROM overlays
+        LDA (ptrlo),Y           ; read program record through ptrlo:ptrhi
+        STA $ff3e               ; show ROM before RTS returns to BASIC
+        RTS
+rampeek_code_src
+        STA $ff3f
+        LDA (srclo),Y           ; read source byte during line compaction
+        STA $ff3e
+        RTS
+rampeek_code_end
 
 errmsg  BYT "?SYNTAX ERROR",0
 memmsg  BYT "?OUT OF MEMORY",0

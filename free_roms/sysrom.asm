@@ -28,8 +28,8 @@ startrow EQU $1c                ; first physical row of the logical line
 copyrowidx EQU $1d             ; row being copied into the input buffer
 textlen EQU $1e                 ; number of copied input bytes
 rowcount EQU $1f                ; characters used by one screen row
-input   EQU $1000               ; one direct-mode line, zero terminated
-rowlink EQU $1140               ; one byte per row: continuation from above
+input   EQU $0200               ; one direct-mode line, zero terminated
+rowlink EQU $02c0               ; one byte per row: continuation from above
 storedline EQU $60               ; BASIC accepted a numbered source line
 
 reset   SEI
