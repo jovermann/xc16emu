@@ -11,9 +11,14 @@
 api_line JMP entry             ; $8000: submit the input buffer
 api_init JMP initprogram       ; $8003: clear program/variables on reset
 api_free JMP freeprint         ; $8006: print measured available bytes
+api_float JMP fexpr            ; $8009: ROM-only floating expression parser
 
 input   EQU $0200               ; zero-terminated line from sysrom
-vars    EQU $0280               ; 26 little-endian integer variables
+vars    EQU $0280               ; 26 one-letter unsigned integer variables
+assign_first EQU $033e          ; numeric name saved across expression calls
+assign_second EQU $033f
+assign_type EQU $03dc
+num_overflow EQU $aa           ; decimal literal exceeded signed integer range
 pos     EQU $30                 ; current input byte index
 vallo   EQU $31                 ; current expression result
 valhi   EQU $32
@@ -63,8 +68,17 @@ maxlo   EQU $5e                 ; LIST upper line bound
 maxhi   EQU $5f
 storedline EQU $60            ; tell sysrom that a numbered line needs no READY
 memlimhi EQU $61               ; exclusive program limit: $40/$80/$FD
+gfxmode EQU $62                 ; shared with the system ROM raster IRQ
+gfxphase EQU $63
+sound1lo EQU $64
+sound1hi EQU $65
+sound2lo EQU $66
+sound2hi EQU $67
+gfxlimit EQU $68                ; program limit while bitmap is allocated
+scaleflag EQU $7b               ; map BASIC's 0..1023 graphics coordinates
+gfxmatrix EQU $7e               ; FF14 value for graphics matrix pair
 rampeek_ptr EQU $0700          ; copied reader for (ptrlo),Y beneath ROM
-rampeek_src EQU $0709          ; copied reader for (srclo),Y beneath ROM
+rampeek_src EQU $070b          ; copied reader for (srclo),Y beneath ROM
 
 putchar EQU $c800
 printz  EQU $c803
@@ -110,8 +124,35 @@ execute JSR checkbreak
         INC pos
         JMP execute
 .dispatch
+        JSR string_mid_assignment
+        BCC .ordinary_assignment
+        LDA failed
+        BNE finished
+        JMP execute
+.ordinary_assignment
+        JSR string_assignment
+        BCC .numeric_or_keyword
+        LDA failed
+        BNE finished
+        JMP execute
+.numeric_or_keyword
+        JSR assignstmt
+        BCC .keyword
+        LDA failed
+        BNE finished
+        JMP execute
+.keyword
+        LDY pos
+        LDA input,Y
         CMP #80                 ; PRINT
         BNE .notprint
+        LDY pos
+        INY
+        LDA input,Y
+        CMP #82                 ; PAINT shares the initial P
+        BEQ .isprint
+        JMP .tryextra
+.isprint
         JSR printstmt
         LDA failed
         BNE finished
@@ -152,7 +193,9 @@ execute JSR checkbreak
         INY
         LDA input,Y
         CMP #78                 ; N
-        BNE syntax
+        BEQ .runvalid
+        JMP syntax
+.runvalid
         LDA pos
         CLC
         ADC #3
@@ -185,7 +228,7 @@ execute JSR checkbreak
         INY
         LDA input,Y
         CMP #73                 ; I
-        BNE syntax
+        BNE .tryextra           ; LOCATE also begins with L
         INY
         LDA input,Y
         CMP #83                 ; S
@@ -197,31 +240,85 @@ execute JSR checkbreak
         JSR listprogram
         RTS
 .notlist CMP #71                 ; GOTO
-        BNE .unknown
+        BNE .tryextra
         LDY pos
         INY
         LDA input,Y
         CMP #79                 ; O
-        BNE .unknown
+        BNE .tryextra
         INY
         LDA input,Y
         CMP #84                 ; T
-        BNE .unknown
+        BNE .tryextra
         INY
         LDA input,Y
         CMP #79                 ; O
-        BNE .unknown
+        BNE .tryextra
         JSR gotostmt
         RTS
+.tryextra
+        JSR extra_dispatch
+        BCC .unknown
+        LDA failed
+        BEQ .extracontinue
+        RTS
+.extracontinue
+        JMP execute
 .unknown JMP syntax
 syntax  LDA #$01
         STA failed
+        JSR error_to_text
         LDA #errmsg%256
         STA msglo
         LDA #errmsg/256
         STA msghi
         JSR printz
         JSR newline
+        RTS
+
+; Report an integer quantity outside the signed 16-bit BASIC % range.
+; Arguments: none. Returns: failed set and a visible diagnostic.
+quantity_error
+        LDA #1
+        STA failed
+        JSR error_to_text
+        LDA #quantmsg%256
+        STA msglo
+        LDA #quantmsg/256
+        STA msghi
+        JSR printz
+        JSR newline
+        RTS
+
+; Report a division whose right-hand argument is zero.
+; Arguments: none. Returns: failed set and a visible diagnostic.
+division_zero_error
+        LDA #1
+        STA failed
+        JSR error_to_text
+        LDA #zeromsg%256
+        STA msglo
+        LDA #zeromsg/256
+        STA msghi
+        JSR printz
+        JSR newline
+        RTS
+
+; BASIC errors leave the allocated bitmap intact but restore ordinary text
+; for the diagnostic and following READY prompt. The frame IRQ keeps running
+; for SOUND durations; gfxmode zero prevents it from restoring graphics.
+error_to_text
+        LDA #0
+        STA gfxmode
+        STA gfxphase
+        STA $ff0b
+        LDA #2
+        STA $ff09               ; discard a pending split-line interrupt
+        LDA #$1b
+        STA $ff06
+        LDA #8
+        STA $ff07
+        STA $ff14
         RTS
 
 ; Poll the C16 RUN/STOP matrix position before each BASIC statement.
@@ -236,6 +333,7 @@ checkbreak
         BNE .nobreak
         LDA #1
         STA failed
+        JSR error_to_text
         LDA #breakmsg%256
         STA msglo
         LDA #breakmsg/256
@@ -288,6 +386,7 @@ gotostmt
 .goto_missing
         LDA #1
         STA failed
+        JSR error_to_text
         LDA #undefmsg%256
         STA msglo
         LDA #undefmsg/256
@@ -308,6 +407,64 @@ spaces  LDY pos
 .spacedone
         RTS
 
+; Parse a numeric assignment entirely on the emulated CPU.
+; On entry pos names the candidate; carry is set only when '=' was found.
+assignstmt
+        JSR number_name
+        BCC .not_assignment
+        LDY number_after
+.skip_space
+        LDA input,Y
+        CMP #32
+        BNE .check_equal
+        INY
+        JMP .skip_space
+.check_equal
+        CMP #61
+        BNE .not_assignment
+        INY
+        STY pos
+        LDA number_first
+        STA assign_first
+        LDA number_second
+        STA assign_second
+        LDA number_type
+        STA assign_type
+        JSR fexpr
+        LDA failed
+        BNE .done
+        LDA assign_type
+        BEQ .store
+        LDA fac_exp
+        CMP #144               ; magnitudes >= 32768 need a range check
+        BCC .store
+        BNE .overflow
+        LDA fac_sign
+        BEQ .overflow
+        LDA fac_m0
+        CMP #$80
+        BNE .overflow
+        LDA fac_m1
+        ORA fac_m2
+        ORA fac_m3
+        BEQ .store
+.overflow
+        JSR quantity_error
+        JMP .done
+.store
+        LDA assign_first
+        STA number_first
+        LDA assign_second
+        STA number_second
+        LDA assign_type
+        STA number_type
+        JSR number_store_float
+.done   SEC
+        RTS
+.not_assignment
+        CLC
+        RTS
+
 ; Parse PRINT items, semicolon continuation, and ten-column comma zones.
 printstmt
         LDA pos
@@ -322,20 +479,9 @@ printstmt
         BEQ .printend
         CMP #58
         BEQ .printend
-        CMP #34                 ; quoted string
-        BNE .maybehex
-        INC pos
-.stringlp
-        LDY pos
-        LDA input,Y
-        BEQ .printend
-        CMP #34
-        BEQ .stringend
-        JSR putchar
-        INC pos
-        JMP .stringlp
-.stringend
-        INC pos
+        JSR string_parse
+        BCC .maybehex
+        JSR string_print
         JMP .itemdone
 .maybehex
         CMP #72                 ; HEX$(integer)
@@ -359,10 +505,10 @@ printstmt
         JSR hexbyte
         JMP .itemdone
 .numericitem
-        JSR expr
+        JSR fexpr
         LDA failed
         BNE .printdone
-        JSR decimal
+        JSR float_print
 .itemdone
         LDA #$00
         STA trail
@@ -432,9 +578,23 @@ hexbyte PHA
         ADC #48
         JMP putchar
 
-; Format an unsigned 16-bit integer from vallo:valhi in decimal.
-decimal LDA #32
+; Format a signed 16-bit integer from vallo:valhi in decimal.
+decimal LDA valhi
+        BPL .positive
+        LDA #45
         JSR putchar
+        SEC
+        LDA #0
+        SBC vallo
+        STA vallo
+        LDA #0
+        SBC valhi
+        STA valhi
+        JMP .magnitude
+.positive
+        LDA #32
+        JSR putchar
+.magnitude
         JSR printnum
         LDA #32
         JMP putchar
@@ -472,37 +632,49 @@ printnum
         LDA digit
         CLC
         ADC #48
-        JSR putchar
+        JSR float_putchar
 .decnext INX
         CPX #5
         BNE .decmore
         RTS
 
-; Parse one direct-mode FOR variable, starting integer, and upper bound.
+; Parse one FOR variable, floating start, bound, and optional STEP.
+; The active loop's name and FAC values live in RAM after the bank readers.
+loop_first EQU $0754
+loop_second EQU $0755
+loop_type EQU $0756
+loop_limit EQU $0758
+loop_step EQU $075e
 forstmt LDA pos
         CLC
         ADC #3
         STA pos
         JSR spaces
+        JSR number_name
+        BCS .name
+        JMP syntax
+.name   LDA number_first
+        STA loop_first
         SEC
         SBC #65
         ASL
         STA forvar
-        INC pos
+        LDA number_second
+        STA loop_second
+        LDA number_type
+        STA loop_type
+        LDA number_after
+        STA pos
         JSR spaces
         CMP #61                 ; '='
         BEQ .forequal
         JMP syntax
 .forequal
         INC pos
-        JSR expr
+        JSR fexpr
         LDA failed
         BNE .fordone
-        LDX forvar
-        LDA vallo
-        STA vars,X
-        LDA valhi
-        STA vars+1,X
+        JSR number_store_float
         JSR spaces
         CMP #84                 ; TO
         BEQ .forto
@@ -510,13 +682,48 @@ forstmt LDA pos
 .forto
         INC pos
         INC pos
-        JSR expr
+        JSR fexpr
         LDA failed
         BNE .fordone
-        LDA vallo
-        STA limitlo
-        LDA valhi
-        STA limithi
+        LDX #5
+.limit  LDA fac_exp,X
+        STA loop_limit,X
+        DEX
+        BPL .limit
+        JSR spaces
+        CMP #83                 ; STEP
+        BNE .unitstep
+        LDY pos
+        INY
+        LDA input,Y
+        CMP #84
+        BNE .unitstep
+        INY
+        LDA input,Y
+        CMP #69
+        BNE .unitstep
+        INY
+        LDA input,Y
+        CMP #80
+        BNE .unitstep
+        LDA pos
+        CLC
+        ADC #4
+        STA pos
+        JSR fexpr
+        JMP .save_step
+.unitstep
+        LDA #1
+        STA fp_intlo
+        LDA #0
+        STA fp_inthi
+        JSR $d906
+.save_step
+        LDX #5
+.step   LDA fac_exp,X
+        STA loop_step,X
+        DEX
+        BPL .step
         LDA pos
         STA looppos
         LDA runmode
@@ -528,7 +735,7 @@ forstmt LDA pos
 .fordone
         RTS
 
-; Increment the active FOR variable and repeat from its body until done.
+; Advance the active floating FOR variable and compare it to the bound.
 nextstmt
         LDA pos
         CLC
@@ -539,18 +746,36 @@ nextstmt
         BNE .nextactive
         JMP syntax
 .nextactive
-        INC vars,X
-        BNE .compareloop
-        INC vars+1,X
-.compareloop
-        LDA vars+1,X
-        CMP limithi
-        BCC .loopagain
-        BNE .loopdone
-        LDA vars,X
-        CMP limitlo
-        BCC .loopagain
-        BEQ .loopagain
+        LDA loop_first
+        STA number_first
+        LDA loop_second
+        STA number_second
+        LDA loop_type
+        STA number_type
+        JSR number_load_float
+        LDX #5
+.step_arg
+        LDA loop_step,X
+        STA arg_exp,X
+        DEX
+        BPL .step_arg
+        JSR $d900
+        JSR number_store_float
+        LDX #5
+.limit_arg
+        LDA loop_limit,X
+        STA arg_exp,X
+        DEX
+        BPL .limit_arg
+        JSR $d918
+        LDY loop_step+5        ; signed STEP selects the comparison direction
+        BMI .descending
+        CMP #1
+        BNE .loopagain
+        JMP .loopdone
+.descending
+        CMP #$ff
+        BNE .loopagain
 .loopdone
         LDA #$ff
         STA forvar
@@ -573,8 +798,18 @@ nextstmt
         STA pos
         RTS
 
-; Parse additive and multiplicative expressions with BASIC precedence.
-expr    JSR term
+; Parse signed addition/subtraction after multiplication. Preserve the outer
+; expression's temporaries so functions and parentheses can evaluate nested
+; expressions without corrupting the caller.
+expr    LDA sumlo
+        PHA
+        LDA sumhi
+        PHA
+        LDA termlo
+        PHA
+        LDA termhi
+        PHA
+        JSR term
         LDA vallo
         STA sumlo
         LDA valhi
@@ -582,7 +817,11 @@ expr    JSR term
 .exprmore
         JSR spaces
         CMP #43                 ; '+'
-        BNE .exprdone
+        BEQ .add
+        CMP #45                 ; '-'
+        BEQ .subtract
+        JMP .exprdone
+.add
         INC pos
         JSR term
         CLC
@@ -593,11 +832,30 @@ expr    JSR term
         ADC valhi
         STA sumhi
         JMP .exprmore
+.subtract
+        INC pos
+        JSR term
+        SEC
+        LDA sumlo
+        SBC vallo
+        STA sumlo
+        LDA sumhi
+        SBC valhi
+        STA sumhi
+        JMP .exprmore
 .exprdone
         LDA sumlo
         STA vallo
         LDA sumhi
         STA valhi
+        PLA
+        STA termhi
+        PLA
+        STA termlo
+        PLA
+        STA sumhi
+        PLA
+        STA sumlo
         RTS
 
 term    JSR atom
@@ -608,11 +866,22 @@ term    JSR atom
 .termmore
         JSR spaces
         CMP #42                 ; '*'
-        BNE .termdone
+        BEQ .multiply
+        CMP #47                 ; '/'
+        BEQ .divide
+        JMP .termdone
+.multiply
         INC pos
         JSR atom
         JSR multiply
         JMP .termmore
+.divide
+        INC pos
+        JSR atom
+        JSR divide
+        LDA failed
+        BEQ .termmore
+        RTS
 .termdone
         LDA termlo
         STA vallo
@@ -654,12 +923,93 @@ multiply
         STA termhi
         RTS
 
+; Divide a signed 16-bit term by the next atom, truncating toward zero.
+; A zero divisor emits a BASIC error; the quotient stays in termlo:termhi.
+divide
+        LDA vallo
+        ORA valhi
+        BNE .nonzero
+        JMP division_zero_error
+.nonzero
+        LDA termhi
+        EOR valhi
+        AND #$80
+        STA op
+        LDA termhi
+        BPL .divisor
+        SEC
+        LDA #0
+        SBC termlo
+        STA termlo
+        LDA #0
+        SBC termhi
+        STA termhi
+.divisor
+        LDA valhi
+        BPL .init
+        SEC
+        LDA #0
+        SBC vallo
+        STA vallo
+        LDA #0
+        SBC valhi
+        STA valhi
+.init   LDA #0
+        STA tmplo
+        STA tmphi
+        LDA #16
+        STA count
+.bit    ASL termlo
+        ROL termhi
+        ROL tmplo
+        ROL tmphi
+        LDA tmphi
+        CMP valhi
+        BCC .next
+        BNE .subtract
+        LDA tmplo
+        CMP vallo
+        BCC .next
+.subtract
+        SEC
+        LDA tmplo
+        SBC vallo
+        STA tmplo
+        LDA tmphi
+        SBC valhi
+        STA tmphi
+        INC termlo
+.next   DEC count
+        BNE .bit
+        LDA op
+        BEQ .done
+        SEC
+        LDA #0
+        SBC termlo
+        STA termlo
+        LDA #0
+        SBC termhi
+        STA termhi
+.done   RTS
+
 ; Parse a decimal literal, one-letter variable, or DEC("hex") function.
 atom    JSR spaces
+        CMP #45                 ; unary minus
+        BNE .check_plus
+        JMP .negative
+.check_plus
+        CMP #43                 ; unary plus
+        BNE .check_digit
+        JMP .positive
+.check_digit
         CMP #48
-        BCC .atomletter
+        BCS .upper_digit
+        JMP .atomletter
+.upper_digit
         CMP #58
-        BCS .atomletter
+        BCC .digit_start
+        JMP .atomletter
+.digit_start
         LDA #$00
         STA vallo
         STA valhi
@@ -692,6 +1042,10 @@ atom    JSR spaces
         LDA valhi
         ADC tmphi
         STA valhi
+        BPL .positive_literal
+        LDA #1
+        STA num_overflow
+.positive_literal
         CLC
         LDA vallo
         ADC digit
@@ -699,12 +1053,69 @@ atom    JSR spaces
         BCC .digitadded
         INC valhi
 .digitadded
+        LDA valhi
+        BPL .digit_in_range
+        LDA #1
+        STA num_overflow
+.digit_in_range
         INC pos
         JMP .digitloop
 .digitfinish
         RTS
+.negative
+        INC pos
+        JSR atom
+        LDA valhi
+        CMP #$80
+        BNE .negate
+        LDA vallo
+        BNE .negate
+        LDA #0
+        STA num_overflow
+.negate
+        SEC
+        LDA #0
+        SBC vallo
+        STA vallo
+        LDA #0
+        SBC valhi
+        STA valhi
+        RTS
+.positive
+        INC pos
+        JMP atom
 .atomletter
+        CMP #40                 ; parenthesized numeric expression
+        BEQ .parenthesized
+        JSR numeric_function
+        BCC .legacy_atom
+        RTS
+.parenthesized
+        INC pos
+        JSR expr
+        JSR spaces
+        CMP #41
+        BEQ .close_paren
+        JMP syntax
+.close_paren
+        INC pos
+        RTS
+.legacy_atom
+        JSR spaces
         CMP #68                 ; DEC("hex")
+        BNE .variable
+        LDY pos
+        INY
+        LDA input,Y
+        CMP #69
+        BNE .variable
+        INY
+        LDA input,Y
+        CMP #67
+        BNE .variable
+        INY
+        LDA input,Y
+        CMP #40
         BNE .variable
         LDA pos
         CLC
@@ -760,15 +1171,12 @@ atom    JSR spaces
         INC pos
         RTS
 .variable
-        SEC
-        SBC #65
-        ASL
-        TAX
-        LDA vars,X
-        STA vallo
-        LDA vars+1,X
-        STA valhi
-        INC pos
+        JSR number_name
+        BCS .named
+        JMP syntax
+.named  LDA number_after
+        STA pos
+        JSR number_load
 .atomdone
         RTS
 
@@ -807,10 +1215,13 @@ initprogram
 .ram64  LDA #$fd
 .setlimit
         STA memlimhi
+        STA gfxlimit
         LDA #$e8
         STA endlo
         LDA #$00
         STA runmode
+        STA scaleflag
+        STA shape_valid
         LDA #$0f
         STA endhi
         JMP clearvars
@@ -821,15 +1232,29 @@ clearvars
         STA vars,X
         DEX
         BPL .initvars
-        RTS
+        JSR number_clear
+        JMP string_clear
 
 ; Print the actual number of free bytes up to the detected physical RAM limit.
 freeprint
+        LDA str_tophi
+        CMP gfxlimit
+        BCC .use_string_top
+        LDA #0
+        STA tmplo
+        LDA gfxlimit
+        BNE .subtract
+.use_string_top
+        LDA str_toplo
+        STA tmplo
+        LDA str_tophi
+.subtract
+        STA tmphi
         SEC
-        LDA #$00
+        LDA tmplo
         SBC endlo
         STA vallo
-        LDA memlimhi
+        LDA tmphi
         SBC endhi
         STA valhi
         JMP printnum
@@ -928,12 +1353,18 @@ storeline
         STA newhi
 .capacity
         LDA newhi
-        CMP memlimhi
+        CMP gfxlimit
+        BCC .check_string_heap
+        JMP .outofmemory
+.check_string_heap
+        LDA newhi
+        CMP str_tophi
         BCC .room
         BNE .outofmemory
         LDA newlo
-        BNE .outofmemory
-.room    LDA found
+        CMP str_toplo
+        BCS .outofmemory
+.room   LDA found
         BEQ insertline
         JSR deleteline
         JMP insertline
@@ -943,6 +1374,7 @@ storeline
         JSR deleteline
 .stored  RTS
 .outofmemory
+        JSR error_to_text
         LDA #memmsg%256
         STA msglo
         LDA #memmsg/256
@@ -1251,18 +1683,33 @@ runprogram_keepvars
 ; allowed while the RAM bank is visible. Both routines preserve X and Y, and
 ; return the addressed RAM byte in A with its zero/negative flags intact.
 rampeek_code_ptr
+        SEI                     ; IRQ vector is in ROM: keep this switch atomic
         STA $ff3f               ; show RAM beneath both ROM overlays
         LDA (ptrlo),Y           ; read program record through ptrlo:ptrhi
         STA $ff3e               ; show ROM before RTS returns to BASIC
+        CLI
         RTS
 rampeek_code_src
+        SEI
         STA $ff3f
         LDA (srclo),Y           ; read source byte during line compaction
         STA $ff3e
+        CLI
         RTS
 rampeek_code_end
 
+        INCLUDE "variables.asm"
+        INCLUDE "strings.asm"
+        INCLUDE "numbers.asm"
+        INCLUDE "float_parser.asm"
+        INCLUDE "extensions.asm"
+        INCLUDE "shapes.asm"
+
 errmsg  BYT "?SYNTAX ERROR",0
+typeerr BYT "?TYPE MISMATCH ERROR",0
+quantmsg BYT "?ILLEGAL QUANTITY ERROR",0
+zeromsg BYT "?DIVISION BY ZERO ERROR",0
+longmsg BYT "?STRING TOO LONG ERROR",0
 memmsg  BYT "?OUT OF MEMORY",0
 undefmsg BYT "?UNDEF'D STATEMENT",0
 breakmsg BYT "?BREAK",0

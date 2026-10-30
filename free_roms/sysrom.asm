@@ -31,6 +31,13 @@ rowcount EQU $1f                ; characters used by one screen row
 input   EQU $0200               ; one direct-mode line, zero terminated
 rowlink EQU $02c0               ; one byte per row: continuation from above
 storedline EQU $60               ; BASIC accepted a numbered source line
+gfxmode EQU $62                  ; 0=text, 1/2=hires, 3/4=multicolor
+gfxphase EQU $63                 ; zero=top of frame, one=split text region
+sound1lo EQU $64                 ; remaining 50 Hz ticks of tone one
+sound1hi EQU $65
+sound2lo EQU $66                 ; remaining ticks of tone two or noise
+sound2hi EQU $67
+gfxmatrix EQU $7e                ; FF14 value for graphics color/screen pair
 
 reset   SEI
         CLD
@@ -46,6 +53,13 @@ reset   SEI
         STA linelen
         STA editpos
         STA rowidx
+        STA gfxmode
+        STA gfxphase
+        STA sound1lo
+        STA sound1hi
+        STA sound2lo
+        STA sound2hi
+        STA gfxmatrix
         LDX #24
 .clearlinks
         STA rowlink,X
@@ -80,6 +94,12 @@ reset   SEI
         STA $ff18
         LDA #$6e
         STA $ff19               ; original blue border
+        LDA #0
+        STA $ff0b               ; frame-start raster IRQ
+        LDA #2
+        STA $ff09               ; clear any pending raster interrupt
+        STA $ff0a               ; enable raster interrupt for sound/split
+        CLI
         LDX #$00
 .clear   LDA #$10                ; dark foreground on white
         STA $0800,X
@@ -837,7 +857,75 @@ api_line JMP newline
 
         INCLUDE "font.asm"
 
-irq     RTI
+; Frame-start IRQ counts SOUND durations in PAL 1/50-second ticks. In modes
+; 2/4 it also changes FF06 at raster 163 so the last five rows use text.
+; A second IRQ at raster zero restores graphics before the next picture.
+irq     PHA
+        TXA
+        PHA
+        TYA
+        PHA
+        LDA #2
+        STA $ff09
+        LDA gfxphase
+        BEQ .frame_start
+        LDA #0
+        STA gfxphase
+        STA $ff0b
+        LDA #$1b
+        STA $ff06               ; bottom five character rows
+        LDA #8
+        STA $ff14               ; ordinary text matrix
+        JMP .done
+.frame_start
+        LDA sound1lo
+        ORA sound1hi
+        BEQ .tone2
+        LDA sound1lo
+        BNE .dec1
+        DEC sound1hi
+.dec1   DEC sound1lo
+        LDA sound1lo
+        ORA sound1hi
+        BNE .tone2
+        LDA $ff11
+        AND #$ef
+        STA $ff11
+.tone2  LDA sound2lo
+        ORA sound2hi
+        BEQ .video
+        LDA sound2lo
+        BNE .dec2
+        DEC sound2hi
+.dec2   DEC sound2lo
+        LDA sound2lo
+        ORA sound2hi
+        BNE .video
+        LDA $ff11
+        AND #$9f
+        STA $ff11
+.video  LDA gfxmode
+        BEQ .done
+        LDA #$3b
+        STA $ff06               ; bitmap at the top of each frame
+        LDA gfxmatrix
+        STA $ff14
+        LDA gfxmode
+        AND #1
+        BNE .done               ; full-screen bitmap mode
+        LDA #1
+        STA gfxphase
+        LDA #163
+        STA $ff0b
+.done   PLA
+        TAY
+        PLA
+        TAX
+        PLA
+        RTI
+        ORG $D900
+        INCLUDE "math.asm"
+        INCLUDE "math_advanced.asm"
         ORG $FFFA
         ADR irq,reset,irq
         END

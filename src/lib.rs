@@ -21,7 +21,7 @@ pub use video::{COMPACT_BORDER, COMPACT_HEIGHT, COMPACT_WIDTH, HEIGHT, WIDTH};
 /// BASIC; those RAM assignments are software conventions, not fixed hardware.
 /// ROM can overlay `$8000-$BFFF` and `$C000-$FBFF`. System ROM supplies
 /// `$FC00-$FCFF` and `$FF40-$FFFF`. In the I/O gap, `$FD00-$FDFF` contains
-/// FD device/port/bank groups, `$FE00-$FEFF` contains the virtual IEC page,
+/// FD device/port/bank groups, `$FE00-$FEFF` contains virtual IEC registers,
 /// and `$FF00-$FF3F` contains TED registers. Unlisted FD groups return a
 /// fixed value; unlisted FE registers read as zero; unlisted TED registers
 /// retain their last written byte.
@@ -800,8 +800,8 @@ impl Machine {
         self.ted.key_latch = !keys;
     }
 
-    /// Dispatch a CPU read in FD00-FF3F to the addressed device. The IEC
-    /// registers live at FEF0-FEF2; TED registers occupy FF00-FF3F.
+    /// Dispatch a CPU read in FD00-FF3F to the addressed device. IEC lives
+    /// at FEF0-FEF2 and TED at FF00-FF3F.
     /// Arguments: address is the full mapped CPU address. Returns: its device
     /// value, or the fixed legacy value for unimplemented FD/FE registers.
     fn read_io(&mut self, address: u16) -> u8 {
@@ -809,7 +809,8 @@ impl Machine {
             return self.read_ted((address & TED_REGISTER_MASK) as u8);
         }
         if address >= IEC_PAGE_START {
-            return self.read_iec((address & IO_PAGE_OFFSET_MASK) as u8);
+            let reg = (address & IO_PAGE_OFFSET_MASK) as u8;
+            return self.read_iec(reg);
         }
         match address & FD_GROUP_MASK {
             FD_DEVICE_GROUP => FD_DEVICE_RESPONSE,
@@ -829,7 +830,8 @@ impl Machine {
             return;
         }
         if address >= IEC_PAGE_START {
-            self.write_iec((address & IO_PAGE_OFFSET_MASK) as u8, value);
+            let reg = (address & IO_PAGE_OFFSET_MASK) as u8;
+            self.write_iec(reg, value);
             return;
         }
         match address & FD_GROUP_MASK {
