@@ -5,17 +5,13 @@
 mod audio_output;
 
 use audio_output::AudioOutput;
-use minifb::{
-    InputCallback, Key, MenuItemHandle, MouseButton, MouseMode, Scale, Window, WindowOptions,
-};
+use minifb::{Key, MenuItemHandle, MouseButton, MouseMode, Scale, Window, WindowOptions};
 #[cfg(not(target_os = "macos"))]
 use minifb::{Menu, MenuHandle};
 use std::{
-    cell::RefCell,
     collections::VecDeque,
     env, fs,
     path::PathBuf,
-    rc::Rc,
     time::{Duration, Instant},
 };
 use xc16emu::{matrix_for_char, Machine, PAL_TED_TICKS_PER_SECOND};
@@ -36,24 +32,7 @@ const JOYSTICK_HELP_ID: usize = 11;
 const PASTE_ID: usize = 12;
 const DELETE_LINE_ID: usize = 13;
 const GLYPH_TABLE_ID: usize = 14;
-
-/// Capture layout-translated text from the host window, including punctuation.
-struct HostText(Rc<RefCell<VecDeque<char>>>);
-
-impl InputCallback for HostText {
-    /// Queue one Unicode character delivered by the host keyboard layout.
-    /// Arguments: uni_char is a Unicode scalar value. Returns: nothing.
-    fn add_char(&mut self, uni_char: u32) {
-        // AppKit sends arrow and other function keys as private-use Unicode
-        // scalars as well as key events. The key-event path handles those.
-        if (0xf700..=0xf8ff).contains(&uni_char) {
-            return;
-        }
-        if let Some(character) = char::from_u32(uni_char) {
-            self.0.borrow_mut().push_back(character);
-        }
-    }
-}
+const RUN_STOP_ID: usize = 15;
 
 /// Characters waiting to be delivered through the C16 keyboard matrix.
 #[derive(Default)]
@@ -64,34 +43,10 @@ struct PasteQueue {
 }
 
 impl PasteQueue {
-    /// Queue one live key, retaining at most five pending copies at the tail.
-    /// Arguments: key is a matrix index and Shift state. Returns: nothing.
-    fn append_live_key(&mut self, key: (u8, bool)) {
-        let repeated = self
-            .pending
-            .iter()
-            .rev()
-            .take_while(|&&queued| queued == key)
-            .take(5)
-            .count();
-        if repeated < 5 {
-            self.pending.push_back(key);
-        }
-    }
-
-    /// Queue one nonprintable C16 key such as a cursor movement.
+    /// Queue one C16 matrix key, for example an editor-menu shortcut.
     /// Arguments: index is the keyboard-matrix position. Returns: nothing.
     fn append_key(&mut self, index: u8) {
         self.pending.push_back((index, false));
-    }
-
-    /// Queue live layout text while limiting a run of identical host keys.
-    /// Arguments: character is host text. Returns: a mapping error or success.
-    fn append_live_char(&mut self, character: char) -> Result<(), String> {
-        let key = matrix_for_char(character)
-            .ok_or_else(|| format!("cannot type character {character:?} on the C16 keyboard"))?;
-        self.append_live_key(key);
-        Ok(())
     }
 
     /// Parse BASIC source from the clipboard and append complete input lines.
@@ -404,11 +359,8 @@ impl WindowMenus {
 }
 
 /// Build the window and its menus for the current desktop settings.
-/// Arguments: settings controls the display; host_text receives layout-translated keys. Returns: window and menu handles or an error.
-fn create_window(
-    settings: DesktopSettings,
-    host_text: Rc<RefCell<VecDeque<char>>>,
-) -> Result<(Window, WindowMenus), String> {
+/// Arguments: settings controls the display. Returns: window and menu handles or an error.
+fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), String> {
     let DesktopSettings {
         zoom,
         border,
@@ -431,7 +383,6 @@ fn create_window(
         },
     )
     .map_err(|e| e.to_string())?;
-    window.set_input_callback(Box::new(HostText(host_text)));
     // The emulator's own PAL pacing controls the default rate. In Fast Mode,
     // minifb must also avoid its independent update-loop rate limit.
     window.set_target_fps(0);
@@ -454,6 +405,7 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         sound_enabled,
     } = settings;
     let machine = macos_menu::new("Machine")?;
+    macos_menu::item(machine, "Run/Stop", RUN_STOP_ID)?;
     macos_menu::item(machine, "Reset", RESET_ID)?;
     macos_menu::separator(machine);
     let fast_mode_item = macos_menu::item(machine, "Fast Mode", FAST_MODE_ID)?;
@@ -516,6 +468,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         sound_enabled,
     } = settings;
     let mut machine_menu = Menu::new("Machine").map_err(|e| e.to_string())?;
+    machine_menu.add_item("Run/Stop", RUN_STOP_ID).build();
     machine_menu.add_item("Reset", RESET_ID).build();
     machine_menu.add_separator();
     let fast_mode_item = machine_menu.add_item("Fast Mode", FAST_MODE_ID).build();
@@ -1152,9 +1105,9 @@ fn parse_go_address(value: Option<String>) -> Result<u16, String> {
 /// Arguments: key is the host key code. Returns: matrix index or None when unmapped.
 fn matrix_key(key: Key) -> Option<u8> {
     Some(match key {
-        Key::Backspace | Key::Delete => 0,
+        Key::Backspace => 0,
+        Key::Delete | Key::F8 => 3,
         Key::Enter => 1,
-        Key::F8 => 3,
         Key::F1 => 4,
         Key::F2 => 5,
         Key::F3 => 6,
@@ -1214,21 +1167,6 @@ fn matrix_key(key: Key) -> Option<u8> {
         Key::LeftShift | Key::RightShift => 15,
         _ => return None,
     })
-}
-
-/// Map host editing keys to the free ROM's input-editor matrix positions.
-/// Arguments: key is the host key code. Returns: an editor key or None.
-fn basic_edit_key(key: Key) -> Option<u8> {
-    match key {
-        Key::Enter => Some(1),
-        Key::Backspace => Some(0),
-        Key::Delete => Some(3),
-        Key::Down => Some(40),
-        Key::Up => Some(43),
-        Key::Left => Some(48),
-        Key::Right => Some(51),
-        _ => None,
-    }
 }
 
 /// Print the package version, copyright and project URL.
@@ -1411,7 +1349,6 @@ fn run() -> Result<(), String> {
         }
     }
     machine.run_frames(100)?;
-    let free_basic_boot = machine.capture_text_screen().contains("FREE BASIC V");
     for line in typed {
         machine.type_text(&line)?;
         machine.type_text("\n")?;
@@ -1424,7 +1361,6 @@ fn run() -> Result<(), String> {
         }
     }
     let start_address = go_address.or(run_address);
-    let free_basic_input = free_basic_boot && start_address.is_none();
     if let Some(address) = start_address {
         machine.cpu.pc = address;
     }
@@ -1464,9 +1400,8 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
-    let host_text = Rc::new(RefCell::new(VecDeque::new()));
     let mut charset_combo_was_down = false;
-    let (mut window, mut menus) = create_window(settings, host_text.clone())?;
+    let (mut window, mut menus) = create_window(settings)?;
     if !config_path.exists() {
         save_settings(&config_path, settings);
     }
@@ -1479,6 +1414,7 @@ fn run() -> Result<(), String> {
     let mut realtime = 0.0;
     let mut left_was_down = false;
     let mut paste = PasteQueue::default();
+    let mut run_stop_frames = 0u8;
     let audio_debug = env::var_os("XC16EMU_AUDIO_DEBUG").is_some();
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // A setting that changes the video crop or status area changes the
@@ -1488,9 +1424,12 @@ fn run() -> Result<(), String> {
         let mut toggle_fast_mode = false;
         if let Some(id) = window.is_menu_pressed() {
             match id {
+                RUN_STOP_ID => {
+                    run_stop_frames = 3;
+                    paste.clear(&mut machine);
+                }
                 RESET_ID => {
                     paste.clear(&mut machine);
-                    host_text.borrow_mut().clear();
                     machine.reset();
                     if let Some(audio) = &audio {
                         audio.clear();
@@ -1504,7 +1443,6 @@ fn run() -> Result<(), String> {
                 FAST_MODE_ID => toggle_fast_mode = true,
                 PASTE_ID => match clipboard_text() {
                     Ok(Some(text)) => {
-                        host_text.borrow_mut().clear();
                         if let Err(error) = paste.append(&text) {
                             eprintln!("paste: {error}");
                         }
@@ -1512,7 +1450,7 @@ fn run() -> Result<(), String> {
                     Ok(None) => {}
                     Err(error) => eprintln!("paste: {error}"),
                 },
-                DELETE_LINE_ID if free_basic_input => {
+                DELETE_LINE_ID => {
                     paste.clear(&mut machine);
                     paste.append_key(3); // Clear text, retaining the line number.
                     paste.append_key(1); // Submit that number to delete the record.
@@ -1607,12 +1545,11 @@ fn run() -> Result<(), String> {
             // menus explicitly before replacing the window.
             menus.remove(&mut window);
             drop(window);
-            (window, menus) = create_window(settings, host_text.clone())?;
+            (window, menus) = create_window(settings)?;
             window.set_position(position.0, position.1);
         }
         if window.is_key_pressed(Key::F12, minifb::KeyRepeat::No) {
             paste.clear(&mut machine);
-            host_text.borrow_mut().clear();
             machine.reset();
             if let Some(audio) = &audio {
                 audio.clear();
@@ -1623,13 +1560,13 @@ fn run() -> Result<(), String> {
             meter_time = Instant::now();
             next_frame = meter_time;
         }
-        if free_basic_input
-            && (window.is_key_pressed(Key::Pause, minifb::KeyRepeat::No)
-                || window.is_key_pressed(Key::F15, minifb::KeyRepeat::No))
-        {
-            // A queued paste must not resume typing after RUN/STOP aborts BASIC.
+        let run_stop_pressed = window.is_key_pressed(Key::Pause, minifb::KeyRepeat::No)
+            || window.is_key_pressed(Key::F15, minifb::KeyRepeat::No);
+        if run_stop_pressed {
+            // A short host key event must survive until the ROM next scans the
+            // keyboard; macOS may deliver press and release in one UI update.
+            run_stop_frames = 3;
             paste.clear(&mut machine);
-            host_text.borrow_mut().clear();
         }
         let command_down = if cfg!(target_os = "macos") {
             window.is_key_down(Key::LeftSuper) || window.is_key_down(Key::RightSuper)
@@ -1639,33 +1576,12 @@ fn run() -> Result<(), String> {
         let shift_down = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
         let commodore_down = window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::RightAlt);
         let charset_combo_down = shift_down && commodore_down;
-        if free_basic_input && charset_combo_down && !charset_combo_was_down {
-            // The free editor uses a host text queue; let this hardware
-            // shortcut reach its ROM without queued characters in front.
+        if charset_combo_down && !charset_combo_was_down {
+            // Keep queued clipboard keys from delaying the physical shortcut.
             paste.clear(&mut machine);
-            host_text.borrow_mut().clear();
         }
         charset_combo_was_down = charset_combo_down;
-        let typed_chars: Vec<_> = host_text.borrow_mut().drain(..).collect();
-        if free_basic_input && !command_down && !commodore_down {
-            for character in typed_chars {
-                if let Err(error) = paste.append_live_char(character) {
-                    eprintln!("keyboard: {error}");
-                }
-            }
-        }
-        let repeat = if free_basic_input {
-            minifb::KeyRepeat::Yes
-        } else {
-            minifb::KeyRepeat::No
-        };
-        for key in window.get_keys_pressed(repeat) {
-            if free_basic_input {
-                if let Some(index) = basic_edit_key(key) {
-                    paste.append_live_key((index, false));
-                }
-                continue;
-            }
+        for key in window.get_keys_pressed(minifb::KeyRepeat::No) {
             // The host clipboard shortcut belongs to Edit, not the C16 V key.
             if key == Key::V && command_down {
                 continue;
@@ -1675,19 +1591,16 @@ fn run() -> Result<(), String> {
             }
         }
         for key in window.get_keys_released() {
-            if free_basic_input {
-                continue;
-            }
             if let Some(index) = matrix_key(key) {
                 machine.set_key(index, false);
             }
         }
-        // Deliver RUN/STOP immediately, even when pasted or typed text is
-        // still waiting in the free BASIC keyboard queue. AppKit can call
+        // Deliver RUN/STOP immediately, even when clipboard text is
+        // still waiting in the keyboard queue. AppKit can call
         // Break F15 on external keyboards; other backends call it Pause.
         machine.set_key(
             52,
-            window.is_key_down(Key::Pause) || window.is_key_down(Key::F15),
+            run_stop_frames > 0 || window.is_key_down(Key::Pause) || window.is_key_down(Key::F15),
         );
         paste.step(&mut machine);
         // Modifier state is sampled every frame. The Cocoa backend can
@@ -1699,6 +1612,7 @@ fn run() -> Result<(), String> {
         machine.set_key(15, shift_down || queued_shift);
         machine.set_key(61, commodore_down);
         machine.run_frames(1)?;
+        run_stop_frames = run_stop_frames.saturating_sub(1);
         if let Some(audio) = &audio {
             audio.push(machine.drain_audio_samples());
         }
@@ -1782,73 +1696,36 @@ mod tests {
     use super::*;
 
     #[test]
-    /// Keep every desktop cursor and delete key wired to the ROM editor.
-    /// Arguments: none. Returns: nothing; assertions fail on regression.
-    fn basic_editor_receives_cursor_and_delete_keys() {
-        assert_eq!(basic_edit_key(Key::Left), Some(48));
-        assert_eq!(basic_edit_key(Key::Right), Some(51));
-        assert_eq!(basic_edit_key(Key::Up), Some(43));
-        assert_eq!(basic_edit_key(Key::Down), Some(40));
-        assert_eq!(basic_edit_key(Key::Delete), Some(3));
-        assert_eq!(basic_edit_key(Key::Backspace), Some(0));
+    /// Physical host keys always address the same C16 matrix positions.
+    /// Arguments: none. Returns: nothing; assertions fail on key regressions.
+    fn physical_keys_use_one_rom_agnostic_matrix() {
+        assert_eq!(matrix_key(Key::Left), Some(48));
+        assert_eq!(matrix_key(Key::Right), Some(51));
+        assert_eq!(matrix_key(Key::Up), Some(43));
+        assert_eq!(matrix_key(Key::Down), Some(40));
+        assert_eq!(matrix_key(Key::Delete), Some(3));
+        assert_eq!(matrix_key(Key::Backspace), Some(0));
+        assert_eq!(matrix_key(Key::Key3), Some(8));
+        assert_eq!(matrix_key(Key::LeftShift), Some(15));
         assert_eq!(matrix_key(Key::Pause), Some(52));
         assert_eq!(matrix_key(Key::F15), Some(52));
     }
 
     #[test]
-    /// Feed host layout text, including multiplication, through the ROM input queue.
-    /// Arguments: none. Returns: nothing; assertions fail on regression.
-    fn host_text_types_special_characters() {
-        let chars = Rc::new(RefCell::new(VecDeque::new()));
-        let mut callback = HostText(chars.clone());
-        for character in "PRINT 2*3".chars() {
-            callback.add_char(character as u32);
-        }
-        callback.add_char(0xf700); // AppKit's duplicate Up-arrow character.
-        assert_eq!(chars.borrow().len(), 9);
-        let mut queue = PasteQueue::default();
-        for character in chars.borrow_mut().drain(..) {
-            queue.append_live_char(character).unwrap();
-        }
-        queue.append_live_char('\n').unwrap();
-        let frames = queue.pending.len() * 4;
+    /// Shift with the physical 3 key reaches the ROM as C16 Shift+3.
+    /// Arguments: none. Returns: nothing; assertions fail on matrix regressions.
+    fn physical_shift_three_types_hash() {
         let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms");
         let mut machine = Machine::from_rom_dir(roms).unwrap();
         machine.run_frames(5).unwrap();
-        for _ in 0..frames {
-            queue.step(&mut machine);
-            machine.run_frames(1).unwrap();
-        }
-        assert!(machine.capture_text_screen().contains(" 6 "));
-    }
-
-    #[test]
-    /// Cap only identical live keys; mixed typing and clipboard text stay intact.
-    /// Arguments: none. Returns: nothing; assertions fail on regression.
-    fn live_key_repeat_has_a_five_key_tail_limit() {
-        let mut queue = PasteQueue::default();
-        for _ in 0..20 {
-            queue.append_live_char('A').unwrap();
-        }
-        queue.append_live_char('B').unwrap();
-        for _ in 0..20 {
-            queue.append_live_char('A').unwrap();
-        }
-        let a = matrix_for_char('A').unwrap();
-        let b = matrix_for_char('B').unwrap();
-        assert_eq!(
-            queue.pending.iter().copied().collect::<Vec<_>>(),
-            [vec![a; 5], vec![b], vec![a; 5]].concat()
-        );
-
-        for _ in 0..20 {
-            queue.append_live_key((43, false)); // Held cursor Up.
-        }
-        assert_eq!(queue.pending.len(), 16);
-
-        let mut pasted = PasteQueue::default();
-        pasted.append("AAAAAAAAAA").unwrap();
-        assert_eq!(pasted.pending.len(), 11); // Ten A keys plus Return.
+        machine.set_key(matrix_key(Key::Key3).unwrap(), true);
+        machine.set_key(matrix_key(Key::LeftShift).unwrap(), true);
+        machine.run_frames(2).unwrap();
+        machine.set_key(matrix_key(Key::Key3).unwrap(), false);
+        machine.set_key(matrix_key(Key::LeftShift).unwrap(), false);
+        machine.run_frames(2).unwrap();
+        let screen = machine.capture_text_screen();
+        assert!(screen.contains('#'), "{screen}");
     }
 
     #[test]

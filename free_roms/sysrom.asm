@@ -19,6 +19,8 @@ celllo  EQU $28                 ; next matrix cell, 0..999
 cellhi  EQU $29
 linelen EQU $2a                 ; bytes in the current input line
 lastkey EQU $2b                 ; edge detector for a held key
+repeat_deadline EQU $2f         ; next frame tick that repeats a held key
+repeat_tick EQU $02da           ; advanced by the 50 Hz raster interrupt
 letter  EQU $2c                 ; character currently being printed
 editpos EQU $2d                 ; cursor offset within the current input line
 rowidx  EQU $2e                 ; physical cursor row, 0..24
@@ -60,6 +62,8 @@ reset   SEI
         STA sound2lo
         STA sound2hi
         STA gfxmatrix
+        STA repeat_tick
+        STA repeat_deadline
         LDX #24
 .clearlinks
         STA rowlink,X
@@ -145,8 +149,21 @@ inputloop
         JMP inputloop
 .havekey CMP lastkey
         BNE .newkey
-        JMP inputloop
+        LDA repeat_tick
+        CMP repeat_deadline
+        BNE inputloop
+        CLC
+        ADC #5                  ; repeat every five PAL frames
+        STA repeat_deadline
+        LDA lastkey
+        JMP .dispatch
 .newkey  STA lastkey
+.first  LDA repeat_tick
+        CLC
+        ADC #25                 ; half-second initial repeat delay
+        STA repeat_deadline
+        LDA lastkey
+.dispatch
         TAX
         CPX #48                 ; cursor left
         BNE .notleft
@@ -195,7 +212,9 @@ inputloop
         STA letter
         LDA editpos
         CMP #79
-        BCS inputloop
+        BCC .length_ok
+        JMP inputloop
+.length_ok
         LDX linelen
 .pad_to_cursor
         CPX editpos
@@ -878,6 +897,7 @@ irq     PHA
         STA $ff14               ; ordinary text matrix
         JMP .done
 .frame_start
+        INC repeat_tick         ; one keyboard-repeat clock per PAL frame
         LDA sound1lo
         ORA sound1hi
         BEQ .tone2

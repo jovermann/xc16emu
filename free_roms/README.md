@@ -25,7 +25,7 @@ machines. The boot banner measures the available bytes for each RAM size:
 | ROM | Capacity | Used | Free |
 | --- | ---: | ---: | ---: |
 | `basrom.dat` | 16,384 bytes | 13,075 bytes | 3,309 bytes |
-| `sysrom.dat` | 16,384 bytes | 6,196 bytes | 10,188 bytes |
+| `sysrom.dat` | 16,384 bytes | 6,231 bytes | 10,153 bytes |
 
 These counts come from the current assembled address ranges, including the
 system ROM's 2,048-byte font area and the BASIC ROM's one-byte end marker.
@@ -73,7 +73,8 @@ it; enter the number alone to delete it. `LIST [first][-last]` displays source
 lines, and `RUN [line]` executes the stored program. `GOTO line` jumps to an
 existing line, including from the direct prompt. A `FOR`/`NEXT` loop may
 span numbered lines. Entering a numbered line leaves the next screen row ready
-for more input without printing `READY.` again. Pause/Break acts as RUN/STOP:
+for more input without printing `READY.` again. Pause/Break (F15 on some
+macOS keyboards) and **Machine → Run/Stop** act as RUN/STOP:
 it interrupts a running program with `?BREAK`. Left and Right move across screen cells; Up and Down move
 one physical screen row while retaining the cursor column. Screen-row links
 identify wrapped lines, so moving to a continuation row imports the whole line
@@ -140,8 +141,9 @@ title shows the unused bytes measured at startup
 and stays on the screen until normal output scrolls it away. A stored line uses three bytes of
 metadata plus its text. The Edit → Paste menu item and Command-V type clipboard
 lines through the emulated keyboard and submit each line with Return. Interactive
-text uses the host keyboard layout, so C16 punctuation such as `*`, quotes,
-brackets, and comparison signs can be entered directly. Output scrolls up when
+keys use the same C16 keyboard-matrix positions with every ROM; the ROM decides
+the resulting character. Shift+3 sends the physical 3 key with Shift, producing
+`#` in this ROM. Output scrolls up when
 the 25-line screen fills.
 
 This is still a small BASIC subset: one `FOR` loop may be active at a time;

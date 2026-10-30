@@ -873,6 +873,20 @@ fn run_stop_interrupts_program() {
 }
 
 #[test]
+/// The free system ROM repeats a held matrix key using PAL frame ticks.
+/// Arguments: none. Returns: nothing; assertions report a ROM keyboard regression.
+fn held_key_repeats_in_free_rom() {
+    let mut machine = booted();
+    machine.set_key(10, true); // Physical A key.
+    machine.run_frames(42).unwrap();
+    machine.set_key(10, false);
+    machine.run_frames(2).unwrap();
+    let text = machine.capture_text_screen();
+    let input = text.split("READY.").last().unwrap();
+    assert!(input.contains("AAAA"), "{text}");
+}
+
+#[test]
 /// Run a loop that crosses stored-line boundaries and use LIST/RUN ranges.
 /// Arguments: none. Returns: nothing; assertions report a regression.
 fn numbered_loop_and_line_ranges_work() {
