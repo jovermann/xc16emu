@@ -92,6 +92,7 @@ entry   LDA #$00
         STA failed
         STA runmode
         STA storedline
+        STA ctrl_sp
         LDA #$ff
         STA forvar              ; no active direct-mode loop
         JSR spaces
@@ -183,7 +184,12 @@ execute JSR checkbreak
         LDA input,Y
         CMP #77                 ; M
         BEQ .rem_done
-        JMP syntax
+        CMP #84                 ; T in RETURN
+        BEQ .is_return
+        JMP .tryextra
+.is_return
+        JSR returnstmt
+        RTS
 .rem_done
         RTS
 .tryrun  CMP #85                 ; U
@@ -228,34 +234,92 @@ execute JSR checkbreak
         INY
         LDA input,Y
         CMP #73                 ; I
-        BNE .tryextra           ; LOCATE also begins with L
+        BEQ .list_i
+        JMP .tryextra           ; LOCATE also begins with L
+.list_i
         INY
         LDA input,Y
         CMP #83                 ; S
-        BNE syntax
+        BEQ .list_s
+        JMP syntax
+.list_s
         INY
         LDA input,Y
         CMP #84                 ; T
-        BNE syntax
+        BEQ .list_t
+        JMP syntax
+.list_t
         JSR listprogram
         RTS
 .notlist CMP #71                 ; GOTO
-        BNE .tryextra
+        BNE .notgoto
         LDY pos
         INY
         LDA input,Y
         CMP #79                 ; O
-        BNE .tryextra
+        BNE .notgoto
         INY
         LDA input,Y
         CMP #84                 ; T
-        BNE .tryextra
+        BNE .notgoto
         INY
         LDA input,Y
         CMP #79                 ; O
-        BNE .tryextra
+        BNE .notgoto
         JSR gotostmt
         RTS
+.notgoto
+        LDY pos
+        LDA input,Y
+        CMP #73                 ; IF
+        BNE .notif
+        LDY pos
+        INY
+        LDA input,Y
+        CMP #70
+        BNE .tryextra
+        JSR ifstmt
+        LDA failed
+        BEQ .if_ok
+        JMP finished
+.if_ok
+        LDA restart
+        BEQ .if_continue
+        JMP finished
+.if_continue
+        JMP execute
+.notif  CMP #69                 ; ELSE ends a taken IF branch
+        BNE .notelse
+        LDY pos
+        INY
+        LDA input,Y
+        CMP #76
+        BNE .tryextra
+        JMP finished
+.notelse
+        CMP #71                 ; GOSUB
+        BNE .notgosub
+        LDY pos
+        INY
+        LDA input,Y
+        CMP #79                 ; O
+        BNE .notgosub
+        INY
+        LDA input,Y
+        CMP #83                 ; S
+        BNE .notgosub
+        JSR gosubstmt
+        LDA failed
+        BEQ .gosub_ok
+        JMP finished
+.gosub_ok
+        LDA restart
+        BEQ .gosub_continue
+        JMP finished
+.gosub_continue
+        JMP execute
+.notgosub
+        JMP .tryextra
 .tryextra
         JSR extra_dispatch
         BCC .unknown
@@ -322,14 +386,14 @@ error_to_text
         RTS
 
 ; Poll the C16 RUN/STOP matrix position before each BASIC statement.
-; The host sets row 6, bit 4 directly even while the text queue is busy.
+; RUN/STOP is row 7, bit 7 in the C16 keyboard matrix.
 checkbreak
-        LDA #$bf                ; select keyboard row 6
+        LDA #$7f                ; select keyboard row 7
         STA $fd30
         LDA #$ff
         STA $ff08
         LDA $ff08
-        AND #$10                ; active-low RUN/STOP bit
+        AND #$80                ; active-low RUN/STOP bit
         BNE .nobreak
         LDA #1
         STA failed
@@ -645,6 +709,10 @@ loop_second EQU $0755
 loop_type EQU $0756
 loop_limit EQU $0758
 loop_step EQU $075e
+ctrl_sp EQU $076a             ; byte count used by FOR/GOSUB frames
+ctrl_ix EQU $076b             ; offset of the active stack frame
+ctrl_base EQU $076c           ; frames end below the $0800 screen colors
+if_op EQU $7f                 ; comparison operator while parsing IF
 forstmt LDA pos
         CLC
         ADC #3
@@ -733,70 +801,15 @@ forstmt LDA pos
         LDA runhi
         STA loophi
 .fordone
+        LDA failed
+        BNE .return
+        JSR for_push
+.return
         RTS
 
-; Advance the active floating FOR variable and compare it to the bound.
-nextstmt
-        LDA pos
-        CLC
-        ADC #4
-        STA pos
-        LDX forvar
-        CPX #$ff
-        BNE .nextactive
-        JMP syntax
-.nextactive
-        LDA loop_first
-        STA number_first
-        LDA loop_second
-        STA number_second
-        LDA loop_type
-        STA number_type
-        JSR number_load_float
-        LDX #5
-.step_arg
-        LDA loop_step,X
-        STA arg_exp,X
-        DEX
-        BPL .step_arg
-        JSR $d900
-        JSR number_store_float
-        LDX #5
-.limit_arg
-        LDA loop_limit,X
-        STA arg_exp,X
-        DEX
-        BPL .limit_arg
-        JSR $d918
-        LDY loop_step+5        ; signed STEP selects the comparison direction
-        BMI .descending
-        CMP #1
-        BNE .loopagain
-        JMP .loopdone
-.descending
-        CMP #$ff
-        BNE .loopagain
-.loopdone
-        LDA #$ff
-        STA forvar
-        RTS
-.loopagain
-        LDA runmode
-        BEQ .loopwithin
-        LDA runlo
-        CMP looplo
-        BNE .otherline
-        LDA runhi
-        CMP loophi
-        BEQ .loopwithin
-.otherline
-        LDA #1
-        STA restart
-        RTS
-.loopwithin
-        LDA looppos
-        STA pos
-        RTS
+; Advance the top FOR frame and resume its body when the bound permits.
+; Arguments: pos points at NEXT. Returns: pos/restart select the next body.
+nextstmt JMP control_nextstmt
 
 ; Parse signed addition/subtraction after multiplication. Preserve the outer
 ; expression's temporaries so functions and parentheses can evaluate nested
@@ -1598,6 +1611,8 @@ listprogram
 ; Execute each stored line through the same parser used by direct mode.
 runprogram
         JSR clearvars
+        LDA #0
+        STA ctrl_sp
 runprogram_keepvars
         LDA #1
         STA runmode
@@ -1608,8 +1623,6 @@ runprogram_keepvars
         LDA #0
         STA resume
         STA restart
-        LDA #$ff
-        STA forvar
 .runnext
         LDA runhi
         CMP endhi
@@ -1647,6 +1660,8 @@ runprogram_keepvars
         BNE .rundone
         LDA restart
         BEQ .runforward
+        CMP #3                  ; RETURN to a direct-mode GOSUB
+        BEQ .rundone
         CMP #2
         BEQ .runjump
         LDA #0
@@ -1702,6 +1717,7 @@ rampeek_code_end
         INCLUDE "strings.asm"
         INCLUDE "numbers.asm"
         INCLUDE "float_parser.asm"
+        INCLUDE "control.asm"
         INCLUDE "extensions.asm"
         INCLUDE "shapes.asm"
 

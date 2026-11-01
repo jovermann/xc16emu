@@ -1153,7 +1153,7 @@ fn matrix_key(key: Key) -> Option<u8> {
         Key::Left => 48,
         Key::Apostrophe => 49,
         Key::Right => 51,
-        Key::Escape | Key::Pause | Key::F15 => 52,
+        Key::Escape => 52,
         Key::Equal => 53,
         Key::Slash => 55,
         Key::Key1 => 56,
@@ -1163,6 +1163,7 @@ fn matrix_key(key: Key) -> Option<u8> {
         Key::Space => 60,
         Key::LeftAlt | Key::RightAlt => 61,
         Key::Q => 62,
+        Key::Pause | Key::F15 => 63,
         Key::Tab => 63,
         Key::LeftShift | Key::RightShift => 15,
         _ => return None,
@@ -1599,7 +1600,7 @@ fn run() -> Result<(), String> {
         // still waiting in the keyboard queue. AppKit can call
         // Break F15 on external keyboards; other backends call it Pause.
         machine.set_key(
-            52,
+            63,
             run_stop_frames > 0 || window.is_key_down(Key::Pause) || window.is_key_down(Key::F15),
         );
         paste.step(&mut machine);
@@ -1707,46 +1708,54 @@ mod tests {
         assert_eq!(matrix_key(Key::Backspace), Some(0));
         assert_eq!(matrix_key(Key::Key3), Some(8));
         assert_eq!(matrix_key(Key::LeftShift), Some(15));
-        assert_eq!(matrix_key(Key::Pause), Some(52));
-        assert_eq!(matrix_key(Key::F15), Some(52));
+        assert_eq!(matrix_key(Key::Pause), Some(63));
+        assert_eq!(matrix_key(Key::F15), Some(63));
     }
 
     #[test]
     /// Shift with the physical 3 key reaches the ROM as C16 Shift+3.
     /// Arguments: none. Returns: nothing; assertions fail on matrix regressions.
     fn physical_shift_three_types_hash() {
-        let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms");
-        let mut machine = Machine::from_rom_dir(roms).unwrap();
-        machine.run_frames(5).unwrap();
-        machine.set_key(matrix_key(Key::Key3).unwrap(), true);
-        machine.set_key(matrix_key(Key::LeftShift).unwrap(), true);
-        machine.run_frames(2).unwrap();
-        machine.set_key(matrix_key(Key::Key3).unwrap(), false);
-        machine.set_key(matrix_key(Key::LeftShift).unwrap(), false);
-        machine.run_frames(2).unwrap();
-        let screen = machine.capture_text_screen();
-        assert!(screen.contains('#'), "{screen}");
+        for roms in [
+            concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms"),
+        ] {
+            let mut machine = Machine::from_rom_dir(roms).unwrap();
+            machine.run_frames(100).unwrap();
+            machine.set_key(matrix_key(Key::Key3).unwrap(), true);
+            machine.set_key(matrix_key(Key::LeftShift).unwrap(), true);
+            machine.run_frames(2).unwrap();
+            machine.set_key(matrix_key(Key::Key3).unwrap(), false);
+            machine.set_key(matrix_key(Key::LeftShift).unwrap(), false);
+            machine.run_frames(2).unwrap();
+            let screen = machine.capture_text_screen();
+            assert!(screen.contains('#'), "{roms}: {screen}");
+        }
     }
 
     #[test]
     /// Verify Markdown BASIC lines are normalized and submitted to the ROM.
     /// Arguments: none. Returns: nothing; assertions fail on regression.
     fn paste_queue_types_basic_and_ignores_code_fences() {
-        let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms");
-        let mut machine = Machine::from_rom_dir(roms).unwrap();
-        machine.run_frames(5).unwrap();
-        let mut paste = PasteQueue::default();
-        paste
-            .append("```basic\r\nPRINT 2+3*4 : REM test\r\n```\r\n")
-            .unwrap();
-        let frames = paste.pending.len() * 4;
-        for _ in 0..frames {
-            paste.step(&mut machine);
-            machine.run_frames(1).unwrap();
+        for roms in [
+            concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms"),
+        ] {
+            let mut machine = Machine::from_rom_dir(roms).unwrap();
+            machine.run_frames(100).unwrap();
+            let mut paste = PasteQueue::default();
+            paste
+                .append("```basic\r\nPRINT 2+3*4 : REM test\r\n```\r\n")
+                .unwrap();
+            let frames = paste.pending.len() * 4;
+            for _ in 0..frames {
+                paste.step(&mut machine);
+                machine.run_frames(1).unwrap();
+            }
+            let text = machine.capture_text_screen();
+            assert!(text.contains(" 14 "), "{roms}: {text}");
+            assert!(!text.contains("?SYNTAX ERROR"), "{roms}: {text}");
         }
-        let text = machine.capture_text_screen();
-        assert!(text.contains(" 14 "), "{text}");
-        assert!(!text.contains("?SYNTAX ERROR"), "{text}");
     }
 
     #[test]

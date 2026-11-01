@@ -24,13 +24,13 @@ machines. The boot banner measures the available bytes for each RAM size:
 
 | ROM | Capacity | Used | Free |
 | --- | ---: | ---: | ---: |
-| `basrom.dat` | 16,384 bytes | 13,075 bytes | 3,309 bytes |
+| `basrom.dat` | 16,384 bytes | 14,482 bytes | 1,902 bytes |
 | `sysrom.dat` | 16,384 bytes | 6,231 bytes | 10,153 bytes |
 
 These counts come from the current assembled address ranges, including the
 system ROM's 2,048-byte font area and the BASIC ROM's one-byte end marker.
-Assembler-filled gaps are counted as free. BASIC has 3,309 consecutive free
-bytes at `$B312`–`$BFFE`. The largest system-ROM gap has 7,450 bytes at
+Assembler-filled gaps are counted as free. BASIC has 1,902 consecutive free
+bytes at `$B891`–`$BFFE`. The largest system-ROM gap has 7,450 bytes at
 `$E2E0`–`$FFF9`.
 
 Build the sibling assembler once, then build the ROMs:
@@ -71,8 +71,10 @@ with `+` and `*`, `FOR`/`NEXT`, `HEX$`, `DEC`, and the example `REM` notes.
 Numbered lines are stored in ascending order. Reenter a line number to replace
 it; enter the number alone to delete it. `LIST [first][-last]` displays source
 lines, and `RUN [line]` executes the stored program. `GOTO line` jumps to an
-existing line, including from the direct prompt. A `FOR`/`NEXT` loop may
-span numbered lines. Entering a numbered line leaves the next screen row ready
+existing line, including from the direct prompt. Nested `FOR`/`NEXT` loops and
+`GOSUB`/`RETURN` calls share a bounded stack below the screen matrix.
+`IF`/`THEN`/`ELSE` chooses a clause. A loop may span numbered lines, and `NEXT J,I`
+advances two nested loops. Entering a numbered line leaves the next screen row ready
 for more input without printing `READY.` again. Pause/Break (F15 on some
 macOS keyboards) and **Machine → Run/Stop** act as RUN/STOP:
 it interrupts a running program with `?BREAK`. Left and Right move across screen cells; Up and Down move
@@ -105,8 +107,8 @@ lowercase/uppercase character sets; on macOS, Option is the C= key.
   `*`, `/`, parentheses, unary signs, decimal fractions, and `E` exponents.
   Default numeric variables retain floating values; `%` variables truncate
   to signed 16-bit integers. Twelve names with two significant letters share
-  a typed descriptor table. `FOR`/`NEXT` supports fractional and signed steps,
-  with one active loop. The ROM implements `ABS`, `SGN`, `INT`, `SQR`, `RND`,
+  a typed descriptor table. `FOR`/`NEXT` supports fractional and signed steps.
+  The ROM implements `ABS`, `SGN`, `INT`, `SQR`, `RND`,
   `LOG`, `EXP`, `COS`, `SIN`, `TAN`, `ATN`, `USR`, `FRE`, `POS`, `PEEK`, `LEN`,
   `ASC`, `VAL`, `RGR`, `RCLR`, `RLUM`, `JOY`, `RDOT`, `INSTR`, and `DEC`.
 - Sixteen string names can hold up to 255 bytes each, subject to available
@@ -123,9 +125,9 @@ lowercase/uppercase character sets; on macOS, Option is the C= key.
 - `DSAVE "file"` and `DLOAD "file"` write and read numbered programs through
   the emulator's virtual IEC drive. Pass `--drive DIR` to select its host
   directory. Files use the free ROM's `FBR1` binary format: four signature
-  bytes, a 16-bit record length, then packed program records. This format is
-  for free ROM round trips; standard tokenized Commodore PRG files are not yet
-  accepted by these commands.
+  bytes, a 16-bit record length, then packed program records. `DLOAD` also
+  reads standard tokenized BASIC PRG files at `$4001` when their tokens are
+  supported by this ROM. Unsupported tokens report a disk error.
 
 Bitmap mode reserves 2 KiB of color/screen matrices and 8 KiB of pixel RAM
 below `$8000`. The available contiguous BASIC program area then ends at

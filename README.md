@@ -143,6 +143,10 @@ Running tests
 cargo test
 ```
 
+The shared ROM behavior suite runs against both ROM sets. The original images
+must be installed locally for that half of the suite. Two fixture cases remain
+pending for the free ROM: Galaxy and the TOM frozen image.
+
 
 Files
 -----
