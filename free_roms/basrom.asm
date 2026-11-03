@@ -12,6 +12,11 @@ api_line JMP entry             ; $8000: submit the input buffer
 api_init JMP initprogram       ; $8003: clear program/variables on reset
 api_free JMP freeprint         ; $8006: print measured available bytes
 api_float JMP fexpr            ; $8009: ROM-only floating expression parser
+api_plot JMP plotpixel          ; $800C: plot a clipped TED bitmap pixel
+api_drawline JMP drawline        ; $800F: join current point to target
+api_nstore JMP number_store_float ; $8012: assign a numeric FAC
+api_nload JMP number_load_float ; $8015: read a numeric FAC
+api_syntax JMP syntax           ; $8018: report a BASIC syntax error
 
 input   EQU $0200               ; zero-terminated line from sysrom
 vars    EQU $0280               ; 26 one-letter unsigned integer variables
@@ -741,7 +746,18 @@ forstmt LDA pos
         INC pos
         JSR fexpr
         LDA failed
-        BNE .fordone
+        BEQ .start_ready
+        JMP .fordone
+.start_ready
+        ; The start expression may name another variable. Restore the FOR
+        ; target before storing FAC, otherwise a nested loop resumes from
+        ; the previous value of its index on the next outer iteration.
+        LDA loop_first
+        STA number_first
+        LDA loop_second
+        STA number_second
+        LDA loop_type
+        STA number_type
         JSR number_store_float
         JSR spaces
         CMP #84                 ; TO
@@ -1239,6 +1255,8 @@ initprogram
         STA endhi
         JMP clearvars
 clearvars
+        LDA #0
+        STA $03dd               ; invalidate a previous DEF FN binding
         LDX #51
 .initvars
         LDA #$00
@@ -1616,6 +1634,9 @@ runprogram
 runprogram_keepvars
         LDA #1
         STA runmode
+        LDA #$ff                ; hide TED's text cursor while RUN executes
+        STA $ff0c
+        STA $ff0d
         LDA ptrlo
         STA runlo
         LDA ptrhi
@@ -1691,6 +1712,7 @@ runprogram_keepvars
 .rundone
         LDA #0
         STA runmode
+        JSR $c809               ; restore the prompt's cursor position
         RTS
 
 ; Relocatable machine code copied to $0700 at reset. Every instruction must

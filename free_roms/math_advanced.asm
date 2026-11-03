@@ -162,7 +162,7 @@ trig_two_pi BYT 131,$c9,$0f,$da,$a2,0
 sqrt_input EQU $05b4
 sqrt_guess EQU $05ba
 
-; Refine sqrt(x) with eight Newton steps, entirely in emulated ROM arithmetic.
+; Refine sqrt(x) with eleven Newton steps, entirely in emulated ROM arithmetic.
 ; Arguments: nonnegative FAC. Returns: square root in FAC; carry on negative.
 advanced_sqr
         LDA fac_sign
@@ -179,7 +179,7 @@ advanced_sqr
         STA sqrt_guess,X
         DEX
         BPL .save_input
-        LDA #8
+        LDA #11
         STA trig_counter
 .iterate
         LDX #5

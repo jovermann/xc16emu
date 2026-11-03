@@ -1170,6 +1170,20 @@ fn matrix_key(key: Key) -> Option<u8> {
     })
 }
 
+/// Release held host keys after one emulated frame in fast mode. Modifier
+/// keys stay down so Shift and C= combinations can accompany a new key edge.
+/// Arguments: machine receives releases and keys are currently held host keys.
+/// Returns: nothing; later frames see no repeat until another host key press.
+fn release_fast_mode_keys(machine: &mut Machine, keys: impl IntoIterator<Item = Key>) {
+    for key in keys {
+        if let Some(index) = matrix_key(key) {
+            if !matches!(index, 15 | 61 | 63) {
+                machine.set_key(index, false);
+            }
+        }
+    }
+}
+
 /// Print the package version, copyright and project URL.
 /// Arguments: none. Returns: nothing; writes one line to standard output.
 fn print_version() {
@@ -1350,9 +1364,15 @@ fn run() -> Result<(), String> {
         }
     }
     machine.run_frames(100)?;
-    for line in typed {
+    let typed_count = typed.len();
+    for (index, line) in typed.into_iter().enumerate() {
         machine.type_text(&line)?;
         machine.type_text("\n")?;
+        if index + 1 < typed_count {
+            // The Return key can start a long ROM command such as DLOAD or
+            // GRAPHIC. Let it finish before typing the next startup line.
+            machine.run_frames(50)?;
+        }
     }
     if let Some((path, run_loaded_prg)) = prg {
         let data = fs::read(path).map_err(|e| e.to_string())?;
@@ -1613,6 +1633,11 @@ fn run() -> Result<(), String> {
         machine.set_key(15, shift_down || queued_shift);
         machine.set_key(61, commodore_down);
         machine.run_frames(1)?;
+        if settings.fast_mode {
+            // Host key-down edges still enter the matrix, but a held key
+            // cannot repeat at the accelerated emulated keyboard rate.
+            release_fast_mode_keys(&mut machine, window.get_keys());
+        }
         run_stop_frames = run_stop_frames.saturating_sub(1);
         if let Some(audio) = &audio {
             audio.push(machine.drain_audio_samples());
@@ -1730,6 +1755,28 @@ mod tests {
             machine.run_frames(2).unwrap();
             let screen = machine.capture_text_screen();
             assert!(screen.contains('#'), "{roms}: {screen}");
+        }
+    }
+
+    #[test]
+    /// A fast-mode key reaches BASIC once while its host key stays held.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
+    fn fast_mode_key_pulse_does_not_repeat() {
+        for roms in [
+            concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms"),
+        ] {
+            let mut machine = Machine::from_rom_dir(roms).unwrap();
+            machine.run_frames(100).unwrap();
+            machine.set_key(matrix_key(Key::A).unwrap(), true);
+            machine.run_frames(1).unwrap();
+            release_fast_mode_keys(&mut machine, [Key::A]);
+            machine.run_frames(20).unwrap();
+            let text = machine.capture_text_screen();
+            assert!(
+                text.lines().any(|line| line.trim() == "A"),
+                "{roms}: {text}"
+            );
         }
     }
 

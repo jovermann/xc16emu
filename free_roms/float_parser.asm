@@ -261,6 +261,10 @@ fprimary
 ; Recognize floating built-ins before the legacy integer function parser.
 ; Arguments: pos at a name. Returns: carry set and FAC on a match.
 float_function
+        JSR $e600              ; user-defined FN call in system ROM
+        BCC .builtin
+        RTS
+.builtin
         LDA #kwfre%256
         STA kwlo
         LDA #kwfre/256
@@ -515,7 +519,7 @@ rnd_state_lo EQU $0764
 rnd_state_hi EQU $0765
 
 ; Advance a 16-bit Galois LFSR and return its upper 15 bits as a fraction.
-; RND(0) seeds from TED raster timing; RND(negative) selects a repeatable seed.
+; RND(0) seeds once from TED raster timing; RND(negative) selects a repeatable seed.
 ; Arguments: FAC is RND's argument. Returns: FAC in [0,1).
 float_rnd
         JSR $d909
@@ -529,6 +533,9 @@ float_rnd
 .positive
         LDA fac_exp
         BNE .ensure_seed
+        LDA rnd_state_lo
+        ORA rnd_state_hi
+        BNE .advance          ; do not collapse every RND(0) to a raster seed
         LDA $ff1d              ; changing TED raster phase
         STA rnd_state_lo
         LDA $ff1e

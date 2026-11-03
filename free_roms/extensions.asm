@@ -50,13 +50,25 @@ box_x2hi EQU $0318
 box_y2 EQU $0319
 box_fill EQU $031a
 box_row EQU $031b
-paint_sp EQU $031c
+paint_toplo EQU $031c
 paint_row EQU $031d
 paint_above EQU $031e
 paint_below EQU $031f
+paint_tophi EQU $06e0
+paint_saved_srclo EQU $06e1
+paint_saved_srchi EQU $06e2
+paint_nextlo EQU $06e3
+paint_nexthi EQU $06e4
 char_column EQU $0320
 char_row EQU $0321
 yradius EQU $0322
+circle_opt EQU $06b0          ; optional CIRCLE argument index
+circle_startlo EQU $06b1
+circle_starthi EQU $06b2
+circle_endlo EQU $06b3
+circle_endhi EQU $06b4
+circle_rotation EQU $06b5
+circle_step EQU $06b6
 char_start EQU $033b
 char_after EQU $033c
 char_reverse EQU $033d
@@ -206,6 +218,26 @@ extra_dispatch
         SEC
         RTS
 .notgshape
+        LDA #kwpoke%256
+        STA kwlo
+        LDA #kwpoke/256
+        STA kwhi
+        JSR keyword
+        BCC .notpoke
+        JSR pokestmt
+        SEC
+        RTS
+.notpoke
+        LDA #kwdef%256
+        STA kwlo
+        LDA #kwdef/256
+        STA kwhi
+        JSR keyword
+        BCC .notdef
+        JSR $e603             ; system-ROM DEF FN parser
+        SEC
+        RTS
+.notdef
         LDA #kwdsave%256
         STA kwlo
         LDA #kwdsave/256
@@ -595,6 +627,34 @@ initmatrix
         CMP #$e8
         BNE .fill
         RTS
+
+; POKE stores a byte at a BASIC-computed RAM or hardware address.
+; Arguments: pos follows POKE and names address,value. Returns: no value;
+; failed reports an invalid signed address or byte outside 0..255.
+pokestmt
+        JSR fexpr
+        LDA failed
+        BNE .done
+        JSR $d909              ; FAC to signed address for this ROM subset
+        LDA fp_intlo
+        STA dstlo
+        LDA fp_inthi
+        STA dsthi
+        JSR spaces
+        CMP #44
+        BNE .bad
+        INC pos
+        JSR fexpr
+        LDA failed
+        BNE .done
+        JSR $d909
+        LDA fp_inthi
+        BNE .bad
+        LDY #0
+        LDA fp_intlo
+        STA (dstlo),Y
+.done   RTS
+.bad    JMP badargument
 
 ; VOL writes TED's shared four-bit volume, preserving voice and DAC controls.
 volstmt
@@ -1216,8 +1276,9 @@ paint_target
         RTS
 
 ; PAINT source,x,y[,boundary-mode] fills one connected region. Each stack
-; entry stores one seed in three low-RAM pages; scan lines push only the first
-; pixel of an adjacent run, avoiding a per-pixel stack overflow on open areas.
+; entry stores a three-byte seed in unused BASIC program RAM above endlo:endhi.
+; The stack stops before the graphics allocation or the downward string heap.
+; Scan lines push only the first pixel of an adjacent run.
 paintstmt
         JSR sourceexpr
         LDA failed
@@ -1244,28 +1305,49 @@ paintstmt
         CMP #44
         BNE .start
         JSR commaexpr           ; accept the documented boundary argument
-.start  LDA #0
-        STA paint_sp
+.start  LDA srclo
+        STA paint_saved_srclo
+        LDA srchi
+        STA paint_saved_srchi
+        LDA endlo
+        STA paint_toplo
+        LDA endhi
+        STA paint_tophi
         JSR paint_target
         BCS .seed
-        RTS
+        JMP paint_finish
 .seed
         JSR paint_push
         LDA failed
         BEQ .popnext
-        RTS
+        JMP paint_finish
 .popnext
-        LDA paint_sp
+        LDA paint_toplo
+        CMP endlo
         BNE .pop
-        RTS
-.pop
-        DEC paint_sp
-        LDX paint_sp
-        LDA $0400,X
+        LDA paint_tophi
+        CMP endhi
+        BNE .pop
+        JMP paint_finish
+.pop    SEC
+        LDA paint_toplo
+        SBC #3
+        STA paint_toplo
+        LDA paint_tophi
+        SBC #0
+        STA paint_tophi
+        LDA paint_toplo
+        STA srclo
+        LDA paint_tophi
+        STA srchi
+        LDY #0
+        LDA (srclo),Y
         STA gxlo
-        LDA $0500,X
+        INY
+        LDA (srclo),Y
         STA gxhi
-        LDA $0600,X
+        INY
+        LDA (srclo),Y
         STA gy
         STA paint_row
         LDA #0
@@ -1304,7 +1386,7 @@ paintstmt
         JSR paint_push
         LDA failed
         BEQ .above_pushed
-        RTS
+        JMP paint_finish
 .above_pushed
         LDA #1
         STA paint_above
@@ -1328,7 +1410,7 @@ paintstmt
         JSR paint_push
         LDA failed
         BEQ .below_pushed
-        RTS
+        JMP paint_finish
 .below_pushed
         LDA #1
         STA paint_below
@@ -1344,20 +1426,60 @@ paintstmt
         BNE .scan
         INC gxhi
         JMP .scan
-.done   RTS
+.done   JMP paint_finish
 
-; Push the current gx:gy as one seed, or report insufficient fill workspace.
+; Restore the BASIC source pointer after temporary stack use.
+; Arguments: paint_saved_src* hold the entry pointer. Returns: to PAINT's caller.
+paint_finish
+        LDA paint_saved_srclo
+        STA srclo
+        LDA paint_saved_srchi
+        STA srchi
+        RTS
+
+; Push gx:gy above the stored program, checking graphics and string limits.
+; Arguments: paint_top is the first free byte. Returns: top advances by three,
+; or failed reports insufficient fill workspace.
 paint_push
-        LDX paint_sp
-        CPX #$ff
-        BEQ .overflow
+        CLC
+        LDA paint_toplo
+        ADC #3
+        STA paint_nextlo
+        LDA paint_tophi
+        ADC #0
+        STA paint_nexthi
+        LDA paint_nexthi
+        CMP gfxlimit
+        BCC .string_limit
+        BNE .overflow
+        LDA paint_nextlo
+        BNE .overflow
+.string_limit
+        LDA paint_nexthi
+        CMP str_tophi
+        BCC .room
+        BNE .overflow
+        LDA paint_nextlo
+        CMP str_toplo
+        BCC .room
+        BNE .overflow
+.room   LDA paint_toplo
+        STA srclo
+        LDA paint_tophi
+        STA srchi
+        LDY #0
         LDA gxlo
-        STA $0400,X
+        STA (srclo),Y
+        INY
         LDA gxhi
-        STA $0500,X
+        STA (srclo),Y
+        INY
         LDA gy
-        STA $0600,X
-        INC paint_sp
+        STA (srclo),Y
+        LDA paint_nextlo
+        STA paint_toplo
+        LDA paint_nexthi
+        STA paint_tophi
         RTS
 .overflow
         JMP paint_memory_error
@@ -1549,7 +1671,16 @@ char_text_cell
         STA (gptrlo),Y
         RTS
 
+; Convert a quoted PETSCII or ASCII byte to the ROM glyph index for CHAR.
+; Arguments: A is the source byte. Returns: A is the screen-code glyph index.
 char_screen_code
+        CMP #$c0                ; shifted PETSCII graphics, e.g. $CD/$CE
+        BCC .ordinary
+        CMP #$e0
+        BCS .literal
+        AND #$7f                ; $CD/$CE select diagonal glyphs $4D/$4E
+        RTS
+.ordinary
         CMP #65
         BCC .literal
         CMP #91
@@ -1636,6 +1767,92 @@ circlestmt
 .y_radius_valid
         STA yradius
 .radii_ready
+        LDA #0
+        STA circle_opt
+        STA circle_startlo
+        STA circle_starthi
+        STA circle_rotation
+        LDA #$68               ; default end angle 360 degrees
+        STA circle_endlo
+        LDA #1
+        STA circle_endhi
+        LDA #2                 ; default curve sampling parameter
+        STA circle_step
+.option
+        JSR spaces
+        CMP #44
+        BNE .options_done
+        INC pos
+        JSR spaces
+        CMP #44                ; empty optional argument
+        BEQ .next_option
+        CMP #58
+        BEQ .next_option
+        CMP #0
+        BEQ .next_option
+        JSR expr
+        LDA failed
+        BEQ .option_value
+        JMP .done
+.option_value
+        LDX circle_opt
+        CPX #0
+        BNE .not_start
+        LDA vallo
+        STA circle_startlo
+        LDA valhi
+        STA circle_starthi
+        JMP .next_option
+.not_start
+        CPX #1
+        BNE .not_end
+        LDA vallo
+        STA circle_endlo
+        LDA valhi
+        STA circle_endhi
+        JMP .next_option
+.not_end
+        LDA valhi
+        BEQ .short_option
+        JMP .invalid_option
+.short_option
+        CPX #2
+        BNE .step_value
+        LDA vallo
+        STA circle_rotation
+        JMP .next_option
+.step_value
+        LDA vallo
+        STA circle_step
+.next_option
+        INC circle_opt
+        LDA circle_opt
+        CMP #4
+        BCC .option
+.options_done
+        LDA circle_step
+        BNE .has_step
+        JMP badargument
+.has_step
+        CMP #3
+        BCC .midpoint
+        LDA radius             ; polygon offsets use signed Q6 bytes
+        CMP #128
+        BCC .x_radius_ok
+        JMP badargument
+.x_radius_ok
+        LDA yradius
+        CMP #128
+        BCC .y_radius_ok
+        JMP badargument
+.y_radius_ok
+        JSR $e2e6              ; stepped closed outline in system ROM
+        RTS
+.midpoint
+        LDA circle_rotation
+        BEQ .unrotated
+        JSR $e2e0             ; system-ROM fixed-point rotation setup
+.unrotated
         LDA radius
         STA circle_x
         LDA #0
@@ -1654,13 +1871,13 @@ circlestmt
         LDA circle_y
         STA oct_y
         JSR circle_scale_y
-        JSR circle_four
+        JSR circle_four_select
         LDA circle_y
         STA oct_x
         LDA circle_x
         STA oct_y
         JSR circle_scale_y
-        JSR circle_four
+        JSR circle_four_select
         INC circle_y
         LDA circle_errhi
         BMI .errnegative
@@ -1682,7 +1899,17 @@ circlestmt
         JSR circle_adjust
         JMP .loop
 .bad    JMP badargument
+.invalid_option
+        JMP badargument
 .done   RTS
+
+; Plot the four ellipse quadrants with the optional geometric rotation.
+; Arguments: oct_x/oct_y are positive offsets. Returns: plotted pixels.
+circle_four_select
+        LDA circle_rotation
+        BEQ .plain
+        JMP $e2e3             ; rotated four-point routine in system ROM
+.plain  JMP circle_four
 
 ; Add 2*signed(tmphi:tmplo)+1 to the midpoint error.
 circle_adjust
@@ -2091,7 +2318,7 @@ dloadstmt
 .record
         LDY #2
         JSR rampeek_ptr
-        CMP #80                 ; RUN copies records into 80-byte input
+        CMP #128                ; loaded source must fit below variables
         BCS dload_badfile
         CLC
         ADC #3
@@ -2138,7 +2365,7 @@ dload_badfile
         STA endhi
         JMP disk_error
 
-; Read a standard $4001 BASIC PRG. Each linked line contains a next pointer,
+; Read a standard $4001 or $1001 BASIC PRG. Each line contains a next pointer,
 ; a little-endian line number, and tokenized text ending in zero. Translate
 ; only the tokens supported by this ROM into its editable source records.
 ; Arguments: IEC channel is open and its first byte ($01) was consumed.
@@ -2146,7 +2373,11 @@ dload_badfile
 dload_prg
         JSR iec_read
         CMP #$40
-        BNE .bad
+        BEQ .address_ok
+        CMP #$10
+        BEQ .address_ok
+        JMP .bad
+.address_ok
         LDA #$e8
         STA endlo
         LDA #$0f
@@ -2182,7 +2413,7 @@ dload_prg
         JMP .char
 .literal
         LDX count
-        CPX #79                 ; RUN's source buffer has 80 bytes
+        CPX #127                ; $0200-$027F precedes variable RAM
         BCS .bad
         LDA digit
         STA input,X
@@ -2198,6 +2429,18 @@ dload_prg
 .done   LDA #$e0
         JSR iec_secondary
         JSR clearvars
+        LDA #0                  ; storeline reused the direct input buffer
+        STA input              ; stop direct execution at the load command
+        STA pos
+        LDA runmode
+        BEQ .return
+        LDA #$e8               ; DLOAD in a program chains to the new first line
+        STA runlo
+        LDA #$0f
+        STA runhi
+        LDA #2
+        STA restart
+.return
         RTS
 .bad    JMP dload_badfile
 
@@ -2226,7 +2469,7 @@ dload_token
 .byte   LDA (srclo),Y
         BEQ .found
         LDX count
-        CPX #79
+        CPX #127
         BCS .unknown
         STA input,X
         INC count
@@ -2252,14 +2495,27 @@ dload_advance
 dload_tokens
         BYT $81," FOR ",0
         BYT $82," NEXT ",0
+        BYT $89," GOTO ",0
         BYT $8b," IF ",0
+        BYT $8f," REM ",0
+        BYT $96," DEF ",0
+        BYT $97," POKE ",0
         BYT $99," PRINT ",0
         BYT $a4," TO ",0
+        BYT $a5," FN ",0
         BYT $a7," THEN ",0
         BYT $a9," STEP ",0
+        BYT $aa,"+",0
+        BYT $ab,"-",0
+        BYT $ac,"*",0
+        BYT $ad,"/",0
+        BYT $b1,">",0
         BYT $b2,"=",0
         BYT $b3,"<",0
+        BYT $b5," INT ",0
         BYT $bb," RND ",0
+        BYT $ba," SQR ",0
+        BYT $bf," SIN ",0
         BYT $cd," RCLR ",0
         BYT $ce," RLUM ",0
         BYT $d5," ELSE ",0
@@ -2267,6 +2523,8 @@ dload_tokens
         BYT $df," PAINT ",0
         BYT $e0," CHAR ",0
         BYT $e1," BOX ",0
+        BYT $e2," CIRCLE ",0
+        BYT $e5," DRAW ",0
         BYT 0
 
 loadingmsg BYT "LOADING",0
@@ -2299,3 +2557,5 @@ kwbox BYT "BOX",0
 kwcolor BYT "COLOR",0
 kwdsave BYT "DSAVE",0
 kwdload BYT "DLOAD",0
+kwpoke BYT "POKE",0
+kwdef BYT "DEF",0

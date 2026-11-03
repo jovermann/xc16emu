@@ -24,14 +24,14 @@ machines. The boot banner measures the available bytes for each RAM size:
 
 | ROM | Capacity | Used | Free |
 | --- | ---: | ---: | ---: |
-| `basrom.dat` | 16,384 bytes | 14,482 bytes | 1,902 bytes |
-| `sysrom.dat` | 16,384 bytes | 6,231 bytes | 10,153 bytes |
+| `basrom.dat` | 16,384 bytes | 15,098 bytes | 1,286 bytes |
+| `sysrom.dat` | 16,384 bytes | 7,326 bytes | 9,058 bytes |
 
 These counts come from the current assembled address ranges, including the
 system ROM's 2,048-byte font area and the BASIC ROM's one-byte end marker.
-Assembler-filled gaps are counted as free. BASIC has 1,902 consecutive free
-bytes at `$B891`–`$BFFE`. The largest system-ROM gap has 7,450 bytes at
-`$E2E0`–`$FFF9`.
+Assembler-filled gaps are counted as free. BASIC has 1,286 consecutive free
+bytes at `$BAF9`–`$BFFE`. The largest system-ROM gap has 6,210 bytes at
+`$E7B8`–`$FFF9`.
 
 Build the sibling assembler once, then build the ROMs:
 
@@ -77,7 +77,9 @@ existing line, including from the direct prompt. Nested `FOR`/`NEXT` loops and
 advances two nested loops. Entering a numbered line leaves the next screen row ready
 for more input without printing `READY.` again. Pause/Break (F15 on some
 macOS keyboards) and **Machine → Run/Stop** act as RUN/STOP:
-it interrupts a running program with `?BREAK`. Left and Right move across screen cells; Up and Down move
+it interrupts a running program with `?BREAK`. The blinking text cursor is
+hidden while a program runs and restored at the prompt. Left and Right move
+across screen cells; Up and Down move
 one physical screen row while retaining the cursor column. Screen-row links
 identify wrapped lines, so moving to a continuation row imports the whole line
 for editing. Backspace removes the
@@ -94,9 +96,12 @@ lowercase/uppercase character sets; on macOS, Option is the C= key.
   releases the bitmap allocation. `SCNCLR` clears the active picture.
 - `DRAW source,x,y[ TO x,y ...]`, `LOCATE x,y`, `CIRCLE source,x,y,xradius[,yradius]`,
   and `BOX source,x1,y1,x2,y2[,0[,fill]]` draw in native bitmap coordinates.
-  `PAINT source,x,y[,boundary]` fills a connected area.
+  `PAINT source,x,y[,boundary]` fills a connected area. Its temporary seed
+  stack uses free BASIC program RAM and stops before graphics or string data.
   `CHAR source,column,row,"text"[,reverse]` writes text cells or draws ROM glyphs
   in a bitmap.
+  `CIRCLE` also accepts rotation and angular step arguments. A step of 120
+  degrees draws the rotated triangles used by the TOLL example.
 - `COLOR source,hue[,luminance]` changes TED colors. `SCALE 1` maps 0–1023
   coordinates onto the native picture; `SCALE 0` uses native coordinates.
   Modes 1–2 use 320×200 pixels and modes 3–4 use 160×200 pixels.
@@ -111,6 +116,8 @@ lowercase/uppercase character sets; on macOS, Option is the C= key.
   The ROM implements `ABS`, `SGN`, `INT`, `SQR`, `RND`,
   `LOG`, `EXP`, `COS`, `SIN`, `TAN`, `ATN`, `USR`, `FRE`, `POS`, `PEEK`, `LEN`,
   `ASC`, `VAL`, `RGR`, `RCLR`, `RLUM`, `JOY`, `RDOT`, `INSTR`, and `DEC`.
+  Numbered programs can define a one-argument function with `DEF FN A(X)=...`
+  and call it with `FN A(value)`.
 - Sixteen string names can hold up to 255 bytes each, subject to available
   program memory. `PRINT`, `CHAR`, `DSAVE`, and `DLOAD` accept string values.
   String functions include `LEFT$`, `RIGHT$`, `MID$`, `CHR$`, `HEX$`, and
@@ -122,11 +129,12 @@ lowercase/uppercase character sets; on macOS, Option is the C= key.
   voices 1–2 or noise voice 3, with a frequency control of 0–1023 and a
   duration in PAL 1/50-second ticks. Duration zero stops a voice. Reusing a
   busy voice waits for its current duration to expire.
-- `DSAVE "file"` and `DLOAD "file"` write and read numbered programs through
+- `POKE address,value` writes a byte of machine memory. `DSAVE "file"` and
+  `DLOAD "file"` write and read numbered programs through
   the emulator's virtual IEC drive. Pass `--drive DIR` to select its host
   directory. Files use the free ROM's `FBR1` binary format: four signature
   bytes, a 16-bit record length, then packed program records. `DLOAD` also
-  reads standard tokenized BASIC PRG files at `$4001` when their tokens are
+  reads standard tokenized BASIC PRG files at `$1001` or `$4001` when their tokens are
   supported by this ROM. Unsupported tokens report a disk error.
 
 Bitmap mode reserves 2 KiB of color/screen matrices and 8 KiB of pixel RAM
@@ -148,10 +156,10 @@ the resulting character. Shift+3 sends the physical 3 key with Shift, producing
 `#` in this ROM. Output scrolls up when
 the 25-line screen fills.
 
-This is still a small BASIC subset: one `FOR` loop may be active at a time;
-other BASIC keywords and TEDMON are not implemented. BASIC parsing and
+This is still a small BASIC subset; many BASIC keywords and TEDMON are not
+implemented. BASIC parsing and
 execution occur entirely in the 6502 ROM code;
 the Rust emulator supplies CPU, memory, TED, keyboard, sound, and virtual IEC
 hardware only. Graphics currently accept absolute Cartesian coordinates;
-relative and polar forms, rotated boxes, circle arcs and rotation, and
-multicolor shape capture are not yet supported.
+relative and polar forms, rotated boxes, circle arcs, and multicolor shape
+capture are not yet supported.

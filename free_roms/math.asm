@@ -572,6 +572,7 @@ fp_cmp
         LDA fac_sign
         CMP arg_sign
         BEQ .same_sign
+        LDA fac_sign            ; compare sign bytes, not CMP's N flag
         BMI .less
         BPL .greater
 .same_sign

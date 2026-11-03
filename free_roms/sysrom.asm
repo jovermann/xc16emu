@@ -33,6 +33,7 @@ rowcount EQU $1f                ; characters used by one screen row
 input   EQU $0200               ; one direct-mode line, zero terminated
 rowlink EQU $02c0               ; one byte per row: continuation from above
 storedline EQU $60               ; BASIC accepted a numbered source line
+runmode EQU $52                  ; BASIC is executing stored program lines
 gfxmode EQU $62                  ; 0=text, 1/2=hires, 3/4=multicolor
 gfxphase EQU $63                 ; zero=top of frame, one=split text region
 sound1lo EQU $64                 ; remaining 50 Hz ticks of tone one
@@ -781,9 +782,16 @@ advance INC screenlo
         LDA #24
         STA rowidx
 sync_cursor
-cursor  LDA cellhi
+cursor  LDA runmode
+        BNE .hidden
+        LDA cellhi
         STA $ff0c
         LDA celllo
+        STA $ff0d
+        RTS
+.hidden
+        LDA #$ff                ; no visible matrix cell has index $ffff
+        STA $ff0c
         STA $ff0d
         RTS
 
@@ -873,6 +881,7 @@ shiftedchars
 api_char JMP putchar
 api_text JMP printz
 api_line JMP newline
+api_cursor JMP sync_cursor      ; BASIC calls after RUN returns to the prompt
 
         INCLUDE "font.asm"
 
@@ -946,6 +955,8 @@ irq     PHA
         ORG $D900
         INCLUDE "math.asm"
         INCLUDE "math_advanced.asm"
+        INCLUDE "circle_rotation.asm"
+        INCLUDE "def_fn.asm"
         ORG $FFFA
         ADR irq,reset,irq
         END

@@ -24,11 +24,14 @@ Features
 Build on macOS
 --------------
 
-Install Rust, then from this directory:
+Install Rust, then from this directory build the release executables:
 
 ```sh
-cargo build --release
+make build
 ```
+
+Use `make debug` for debug executables in `target/debug/`, or `make clean` to
+remove Rust build artifacts.
 
 Run on macOS
 ------------
@@ -83,6 +86,20 @@ For a PRG loaded at `$0200` whose entry point is `$4000`:
 For BASIC's `DLOAD` and `DSAVE`, `--drive DIR` exposes a host directory as
 device 8. Filenames are confined to that directory. `--dry-run` acknowledges
 drive saves without writing a file. `--verbose` reports drive file opens.
+
+The [corrected FUNC plotter](examples/basic/FUNC.BAS) enters graphics
+mode before defining its function. Load the tokenized program with:
+
+```sh
+./target/release/xc16emu --roms free_roms --drive examples/basic \
+  --type 'DLOAD"FUNC.BAS"' --type RUN
+```
+
+If a graphics program defines `FN` before its first `GRAPHIC`, the original
+ROM can retain a function-expression pointer into the former program address
+after relocating the program. Move `GRAPHIC` before `DEF FN` in that program,
+or enter `GRAPHIC 1,1` before `DLOAD`. Startup `--type` commands run in order;
+the emulator gives each command time to finish before typing the next one.
 
 `--frozen-image FILE` accepts the legacy 64 KiB frozen-image format.
 
