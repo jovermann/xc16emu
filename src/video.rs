@@ -73,9 +73,26 @@ impl Machine {
         if !(0..200).contains(&d) {
             return;
         }
-        let d = d as usize;
+        // FF1F holds TED's independent subline counter. TOM moves FF1D by
+        // four lines while moving FF1F the other way; the character row must
+        // stay put until the subline counter wraps. The raster register is
+        // an interrupt counter, not the source of the screen-matrix row.
+        let glyph_line = if self.ted.char_raster_written {
+            self.ted.char_raster as usize
+        } else {
+            d as usize & 7
+        };
+        let char_row = if self.ted.char_raster_written {
+            self.ted.char_row
+        } else {
+            d.div_euclid(8)
+        };
+        if !(0..25).contains(&char_row) {
+            return;
+        }
+        let char_row = char_row as usize;
         // TED fetches a screen matrix address once per character row.
-        if d & 7 == 0 {
+        if glyph_line == 0 {
             self.video_matrix_latch =
                 (self.ted.registers[TED_MATRIX_BASE as usize] as usize & 0xf8) << 8;
         }
@@ -93,14 +110,13 @@ impl Machine {
         let bitmap = con1 & TED_BITMAP_MODE_BIT != 0;
         let extended = con1 & TED_EXTENDED_MODE_BIT != 0;
         let x_scroll = (con2 & 7) as usize;
-        let char_row = d / 8;
 
         for col in 0..40 {
             let cell = char_row * 40 + col;
             let color = self.video_ram(matrix + cell);
             let code = self.video_ram(matrix + SCREEN_CODE_OFFSET + cell);
             let (pattern, colors, double_pixel) = if bitmap {
-                let address = bitmap_base + char_row * 320 + col * 8 + d % 8;
+                let address = bitmap_base + char_row * 320 + col * 8 + glyph_line;
                 let pattern = self.video_bank(address, rom_bitmap);
                 let c0 = (code & 15) | (color & 0x70);
                 let c1 = ((code >> 4) | (color << 4)) & TED_COLOR_VALUE_MASK;
@@ -125,7 +141,7 @@ impl Machine {
                 } else {
                     code & TED_COLOR_VALUE_MASK
                 };
-                let address = char_base + glyph as usize * 8 + d % 8;
+                let address = char_base + glyph as usize * 8 + glyph_line;
                 let mut pattern = self.video_bank(address, rom_chars);
                 if !multicolor
                     && !extended
@@ -218,5 +234,49 @@ mod tests {
         machine.ted.registers[7] = 0x18; // multicolor mode masks bit 7, without reversing
         machine.render_line(3, 3);
         assert_eq!(machine.pixels[pixel], 1);
+    }
+
+    #[test]
+    /// Check TOM's paired FF1D/FF1F positions keep the same character row.
+    /// Arguments: none. Returns: nothing; assertions fail on regression.
+    fn writable_character_scanline_keeps_the_row_transition_smooth() {
+        let mut machine =
+            Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/old/roms")).unwrap();
+        machine.ted.registers[6] = 0x1b;
+        machine.ted.registers[7] = 0x08;
+        machine.ted.registers[0x12] = 0;
+        machine.ted.registers[0x13] = 0x20;
+        machine.ted.registers[0x14] = 0x08;
+        machine.ram[0x0800 + 4 * 40] = 1;
+        machine.ram[0x0800 + 5 * 40] = 1;
+        machine.ram[0x0c00 + 4 * 40] = 0;
+        machine.ram[0x0c00 + 5 * 40] = 1;
+        machine.ram[0x2000 + 2] = 0x80;
+        machine.ram[0x2000 + 6] = 0x80;
+        machine.ram[0x2008] = 0x80;
+        let pixel = |line| (line + Y_OFFSET) * WIDTH + X_OFFSET;
+
+        machine.render_line(3, 3); // latch the screen matrix
+        machine.ted.display_line = 36;
+        machine.write(0xff1d, 0x2a);
+        machine.write(0xff1f, 6);
+        machine.render_line(0x2a, 36);
+        assert_eq!(machine.pixels[pixel(36)], 1);
+        assert_eq!(machine.ted.char_row, 4);
+
+        machine.write(0xff1d, 0x2e);
+        machine.write(0xff1f, 2);
+        machine.render_line(0x2e, 36);
+        assert_eq!(machine.pixels[pixel(36)], 1);
+        assert_eq!(machine.ted.char_row, 4);
+
+        for _ in 0..6 {
+            machine.ted.line_cycles = 113;
+            machine.advance_hardware(1);
+        }
+        assert_eq!(machine.read(0xff1f) & 7, 0);
+        assert_eq!(machine.ted.char_row, 5);
+        machine.render_line(machine.ted.raster, machine.ted.display_line);
+        assert_eq!(machine.pixels[pixel(42)], 1); // next row, scanline zero
     }
 }

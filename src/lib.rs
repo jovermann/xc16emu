@@ -159,6 +159,7 @@ pub mod memory_map {
     pub const TED_RASTER_HIGH: u8 = 0x1c;
     pub const TED_RASTER_LOW: u8 = 0x1d;
     pub const TED_LINE_POSITION: u8 = 0x1e;
+    pub const TED_CHARACTER_SCANLINE: u8 = 0x1f;
     pub const TED_SHOW_ROM: u8 = 0x3e;
     pub const TED_SHOW_RAM: u8 = 0x3f;
     /// TED has 64 memory-mapped registers at `$FF00-$FF3F`.
@@ -213,6 +214,12 @@ pub struct Ted {
     pub raster: u16,
     /// Output scanline, separate from the software-writable raster counter.
     display_line: u16,
+    /// Current glyph/bitmap scanline within an eight-line character row.
+    char_raster: u8,
+    /// Character row fetched by TED after software writes the subline counter.
+    char_row: isize,
+    /// FF1F has set the character-row scanline explicitly this frame.
+    char_raster_written: bool,
     /// TED timing ticks into this raster line (114 ticks per PAL line).
     pub line_cycles: u32,
     /// Unpaired TED tick for the three timers, which run at the slow clock.
@@ -243,6 +250,9 @@ impl Default for Ted {
             registers: [0; TED_REGISTER_COUNT],
             raster: 0,
             display_line: 0,
+            char_raster: 0,
+            char_row: 0,
+            char_raster_written: false,
             line_cycles: 0,
             timer_tick_remainder: 0,
             frames: 0,
@@ -727,6 +737,12 @@ impl Machine {
             while self.ted.line_cycles >= TICKS_PER_LINE {
                 self.ted.line_cycles -= TICKS_PER_LINE;
                 self.render_line(self.ted.raster, self.ted.display_line);
+                if self.ted.char_raster_written {
+                    self.ted.char_raster = (self.ted.char_raster + 1) & 7;
+                    if self.ted.char_raster == 0 {
+                        self.ted.char_row += 1;
+                    }
+                }
                 self.ted.raster = (self.ted.raster + 1) % LINES_PER_FRAME;
                 self.ted.display_line += 1;
                 // Reprogramming the raster counter can shorten a frame.
@@ -734,6 +750,7 @@ impl Machine {
                 // when the counter wraps, as the old emulator did.
                 if self.ted.raster == 0 || self.ted.display_line == LINES_PER_FRAME {
                     self.ted.display_line = 0;
+                    self.ted.char_raster_written = false;
                     self.ted.frames += 1;
                 }
                 if self.ted.raster == self.ted.irq_line {
@@ -863,6 +880,16 @@ impl Machine {
             TED_RASTER_HIGH => (self.ted.raster >> 8) as u8,
             TED_RASTER_LOW => self.ted.raster as u8,
             TED_LINE_POSITION => (self.ted.line_cycles / 2) as u8,
+            TED_CHARACTER_SCANLINE => {
+                let subline = if self.ted.char_raster_written {
+                    self.ted.char_raster
+                } else {
+                    (self.ted.raster as u8)
+                        .wrapping_sub(self.ted.registers[TED_CONTROL_1 as usize] & 7)
+                        & 7
+                };
+                (self.ted.registers[r] & !7) | subline
+            }
             _ => self.ted.registers[r],
         }
     }
@@ -917,6 +944,14 @@ impl Machine {
             }
             TED_RASTER_LOW => {
                 self.ted.raster = (self.ted.raster & TED_RASTER_HIGH_BIT) | value as u16
+            }
+            TED_CHARACTER_SCANLINE => {
+                if !self.ted.char_raster_written {
+                    let yscroll = (self.ted.registers[TED_CONTROL_1 as usize] & 7) as isize;
+                    self.ted.char_row = (self.ted.display_line as isize - yscroll).div_euclid(8);
+                }
+                self.ted.char_raster = value & 7;
+                self.ted.char_raster_written = true;
             }
             TED_SHOW_ROM => self.ram_enabled = false,
             TED_SHOW_RAM => self.ram_enabled = true,
