@@ -301,6 +301,10 @@ pub struct Machine {
     pub line_modes: [u8; HEIGHT],
     /// Video matrix base latched at the start of each eight-line character row.
     video_matrix_latch: usize,
+    /// True while the CPU is executing an instruction, before its cycles elapse.
+    cpu_step_active: bool,
+    /// CPU raster-register write waiting for the instruction's final bus cycle.
+    pending_raster_low: Option<u8>,
     /// Virtual IEC registers: data at FEF0, status at FEF1, handshake at FEF2.
     iec: [u8; IEC_REGISTER_COUNT],
     /// Pending command prefix from a FEF0 write (81, 82, or 83).
@@ -370,6 +374,8 @@ impl Machine {
             pixels: Box::new([0; WIDTH * HEIGHT]),
             line_modes: [0; HEIGHT],
             video_matrix_latch: 0,
+            cpu_step_active: false,
+            pending_raster_low: None,
             iec: [0; IEC_REGISTER_COUNT],
             iec_command: 0,
             iec_name: Vec::new(),
@@ -403,6 +409,8 @@ impl Machine {
         self.key_matrix.fill(0);
         self.key_port = KEYBOARD_IDLE_VALUE;
         self.video_matrix_latch = 0;
+        self.cpu_step_active = false;
+        self.pending_raster_low = None;
     }
 
     /// Set a 16, 32, or 64 KiB model, clear physical RAM, and reset.
@@ -547,9 +555,27 @@ impl Machine {
     /// Execute one instruction and advance video and timers by its cycles.
     /// Arguments: self is the mutable machine. Returns: consumed CPU cycles or an execution error.
     pub fn step(&mut self) -> Result<u8, String> {
-        let cycles = self.step_cpu()?;
+        self.cpu_step_active = true;
+        let result = self.step_cpu();
+        self.cpu_step_active = false;
+        let cycles = match result {
+            Ok(cycles) => cycles,
+            Err(error) => {
+                self.pending_raster_low = None;
+                return Err(error);
+            }
+        };
         self.instructions_executed += 1;
-        self.advance_hardware(cycles);
+        if let Some(value) = self.pending_raster_low.take() {
+            // A 7501 store drives its address and data on the final bus
+            // cycle. Rendering the intervening line with the new raster
+            // value makes TOM's bottom line vanish on some frames.
+            self.advance_hardware(cycles - 1);
+            self.write_ted(TED_RASTER_LOW, value);
+            self.advance_hardware(1);
+        } else {
+            self.advance_hardware(cycles);
+        }
         Ok(cycles)
     }
 
@@ -900,6 +926,10 @@ impl Machine {
     /// Arguments: reg is the six-bit TED register index and value is written.
     /// Returns: nothing; device state changes before the next CPU instruction.
     fn write_ted(&mut self, reg: u8, value: u8) {
+        if reg == TED_RASTER_LOW && self.cpu_step_active {
+            self.pending_raster_low = Some(value);
+            return;
+        }
         let r = reg as usize;
         self.ted.registers[r] = value;
         match reg {

@@ -274,10 +274,22 @@ fn tom_raster_irq_keeps_the_character_set_stable_each_frame() {
     // The game sets a second raster interrupt during the current line. If
     // that interrupt is lost, it returns to the ROM character set only on
     // alternate frames and both the picture and music run at half speed.
-    for _ in 0..20 {
+    for frame in 0..40 {
         machine.run_frames(1).unwrap();
         assert_eq!(machine.ted.registers[0x13], 0xd5);
         assert_eq!(machine.ted.irq_line, 33);
+        if frame >= 16 {
+            // TOM rewrites FF1D at the end of a raster line. Applying that
+            // store at instruction start made this entire last picture line
+            // alternate between its graphics and the black border.
+            let pixels = machine.visible_pixels();
+            let bottom_line = &pixels[181 * 320..182 * 320];
+            assert!(
+                bottom_line.iter().any(|&pixel| pixel != 0),
+                "TOM's bottom picture line vanished on frame {}",
+                machine.ted.frames
+            );
+        }
     }
     assert!(machine.capture_text_screen().contains("TOM 16"));
 }
