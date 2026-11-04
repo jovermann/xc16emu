@@ -78,6 +78,16 @@ glyphhi EQU $7d
 ; Dispatch a fully spelled extension keyword. C=1 means handled; the caller
 ; then resumes after a colon, unless failed was set by a command.
 extra_dispatch
+        LDA #kwmonitor%256
+        STA kwlo
+        LDA #kwmonitor/256
+        STA kwhi
+        JSR keyword
+        BCC .notmonitor
+        JSR $c80c             ; system ROM owns interactive MONITOR input
+        SEC
+        RTS
+.notmonitor
         LDA #kwgraphic%256
         STA kwlo
         LDA #kwgraphic/256
@@ -2544,6 +2554,7 @@ disk_error
 diskmsg BYT "?DISK ERROR",0
 
 kwgraphic BYT "GRAPHIC",0
+kwmonitor BYT "MONITOR",0
 kwpaint BYT "PAINT",0
 kwchar BYT "CHAR",0
 kwscnclr BYT "SCNCLR",0

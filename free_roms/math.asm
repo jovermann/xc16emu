@@ -669,3 +669,4 @@ fp_round6_to_arg
 fp_ten_constant BYT 132,$a0,0,0,0,0
 fp_pi_constant BYT 130,$c9,$0f,$da,$a2,0
 fp_round6_constant BYT 108,$86,$37,$bd,$06,0
+math_end

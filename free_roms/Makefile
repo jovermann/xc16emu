@@ -7,7 +7,7 @@ all: basrom.dat sysrom.dat
 basrom.dat: basrom.asm variables.asm strings.asm numbers.asm float_parser.asm control.asm extensions.asm shapes.asm
 	$(ASS6510) -o $@ $<
 
-sysrom.dat: sysrom.asm font.asm math.asm math_advanced.asm circle_rotation.asm def_fn.asm
+sysrom.dat: sysrom.asm font.asm math.asm math_advanced.asm circle_rotation.asm def_fn.asm abbreviations.asm monitor.asm monitor_extra.asm monitor_opcodes.asm
 	$(ASS6510) -o $@ $<
 
 test: all

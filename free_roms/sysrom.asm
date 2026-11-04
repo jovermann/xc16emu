@@ -41,6 +41,7 @@ sound1hi EQU $65
 sound2lo EQU $66                 ; remaining ticks of tone two or noise
 sound2hi EQU $67
 gfxmatrix EQU $7e                ; FF14 value for graphics color/screen pair
+monitor_active EQU $06e8         ; nonzero while the ROM monitor owns input
 
 reset   SEI
         CLD
@@ -63,6 +64,7 @@ reset   SEI
         STA sound2lo
         STA sound2hi
         STA gfxmatrix
+        STA monitor_active
         STA repeat_tick
         STA repeat_deadline
         LDX #24
@@ -273,7 +275,15 @@ inputloop
         STA input,X
         JSR endcursor
         JSR newline
+        LDA monitor_active
+        BEQ .basic_input
+        JSR monitor_process
+        JMP .after_input
+.basic_input
         JSR $8000               ; one direct-mode BASIC statement list
+.after_input
+        LDA monitor_active
+        BNE .entered_done
         LDA storedline
         BNE .entered_done        ; storing a line leaves a blank input row
         JSR ready
@@ -670,7 +680,14 @@ putchar STA letter
         CMP #97
         BCC .unsupported
         CMP #128
-        BCS .writecode          ; already a native screen-code byte
+        BCC .check_lowercase
+        CMP #$c0
+        BCC .writecode          ; already a native screen-code byte
+        CMP #$e0
+        BCS .writecode
+        AND #$7f                ; shifted letters are PETSCII graphics
+        JMP .writecode
+.check_lowercase
         CMP #123
         BCS .unsupported
         SEC
@@ -799,21 +816,41 @@ cursor  LDA runmode
 ; Copying forward is safe because the destination precedes the source.
 scrollscreen
         LDX #0
-.scrollpages
+.screen0
         LDA $0c28,X
         STA $0c00,X
+        INX
+        BNE .screen0
+        LDX #0
+.screen1
         LDA $0d28,X
         STA $0d00,X
+        INX
+        BNE .screen1
+        LDX #0
+.screen2
         LDA $0e28,X
         STA $0e00,X
+        INX
+        BNE .screen2
+        LDX #0
+.color0
         LDA $0828,X
         STA $0800,X
+        INX
+        BNE .color0
+        LDX #0
+.color1
         LDA $0928,X
         STA $0900,X
+        INX
+        BNE .color1
+        LDX #0
+.color2
         LDA $0a28,X
         STA $0a00,X
         INX
-        BNE .scrollpages
+        BNE .color2
         LDX #0
 .scrolltail
         LDA $0f28,X
@@ -868,13 +905,13 @@ keychars
 ; of a host keyboard layout. Zero falls back to the unshifted table above.
 shiftedchars
         BYT 0,0,0,0,0,0,0,0
-        BYT 35,0,0,36,0,0,0,0
-        BYT 37,0,0,38,0,0,0,0
-        BYT 39,0,0,40,0,0,0,0
-        BYT 41,0,0,64,0,0,0,0
-        BYT 0,0,0,0,62,91,0,60
+        BYT 35,$d7,$c1,36,$da,$d3,$c5,0
+        BYT 37,$d2,$c4,38,$c3,$c6,$d4,$d8
+        BYT 39,$d9,$c7,40,$c2,$c8,$d5,$d6
+        BYT 41,$c9,$ca,64,$cd,$cb,$cf,$ce
+        BYT 0,$d0,$cc,0,62,91,0,60
         BYT 0,0,93,0,0,0,94,63
-        BYT 33,0,0,34,0,0,0,0
+        BYT 33,0,0,34,0,0,$d1,0
 
 ; The BASIC ROM calls only these stable, three-byte entry points.
         ORG $C800
@@ -882,6 +919,8 @@ api_char JMP putchar
 api_text JMP printz
 api_line JMP newline
 api_cursor JMP sync_cursor      ; BASIC calls after RUN returns to the prompt
+api_monitor JMP monitor_enter    ; BASIC's MONITOR command enters TEDMON
+api_abbrev JMP expand_abbreviations
 
         INCLUDE "font.asm"
 
@@ -895,6 +934,22 @@ irq     PHA
         PHA
         LDA #2
         STA $ff09
+        TSX
+        LDA $0104,X             ; B bit in the stacked status marks BRK
+        AND #$10
+        BEQ .ordinary_irq
+        LDA monitor_active
+        BEQ .ordinary_irq
+        LDA $0105,X             ; BRK saved PC after its padding byte
+        STA mon_pc_lo
+        LDA $0106,X
+        STA mon_pc_hi
+        LDA #monitor_break_resume%256
+        STA $0105,X
+        LDA #monitor_break_resume/256
+        STA $0106,X
+        JMP .done               ; RTI restores the program's A/X/Y/P
+.ordinary_irq
         LDA gfxphase
         BEQ .frame_start
         LDA #0
@@ -952,11 +1007,16 @@ irq     PHA
         TAX
         PLA
         RTI
+irq_end
         ORG $D900
         INCLUDE "math.asm"
         INCLUDE "math_advanced.asm"
         INCLUDE "circle_rotation.asm"
         INCLUDE "def_fn.asm"
+        INCLUDE "abbreviations.asm"
+        INCLUDE "monitor.asm"
+        INCLUDE "monitor_extra.asm"
+        INCLUDE "monitor_opcodes.asm"
         ORG $FFFA
         ADR irq,reset,irq
         END

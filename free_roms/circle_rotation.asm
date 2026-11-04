@@ -349,3 +349,4 @@ circle_plot_offset
         ADC #0
 .y_done STA rot_gyhi
         JMP $800c               ; BASIC ROM owns TED pixel memory layout
+circle_rotation_end

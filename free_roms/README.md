@@ -24,14 +24,14 @@ machines. The boot banner measures the available bytes for each RAM size:
 
 | ROM | Capacity | Used | Free |
 | --- | ---: | ---: | ---: |
-| `basrom.dat` | 16,384 bytes | 15,098 bytes | 1,286 bytes |
-| `sysrom.dat` | 16,384 bytes | 7,326 bytes | 9,058 bytes |
+| `basrom.dat` | 16,384 bytes | 15,179 bytes | 1,205 bytes |
+| `sysrom.dat` | 16,384 bytes | 11,898 bytes | 4,486 bytes |
 
 These counts come from the current assembled address ranges, including the
 system ROM's 2,048-byte font area and the BASIC ROM's one-byte end marker.
-Assembler-filled gaps are counted as free. BASIC has 1,286 consecutive free
-bytes at `$BAF9`–`$BFFE`. The largest system-ROM gap has 6,210 bytes at
-`$E7B8`–`$FFF9`.
+Assembler-filled gaps are counted as free. BASIC has 1,205 consecutive free
+bytes at `$BB4A`–`$BFFE`. The largest system-ROM gap has 2,030 bytes at
+`$C812`–`$CFFF`.
 
 Build the sibling assembler once, then build the ROMs:
 
@@ -88,6 +88,22 @@ text but keeps its number, so Return then deletes that stored program line.
 **Edit → Delete Program Line** performs both actions for the current numbered
 input line. Shift+C= switches between the uppercase/graphics and
 lowercase/uppercase character sets; on macOS, Option is the C= key.
+Shift plus a letter enters its C16 graphic glyph. BASIC keyword abbreviations
+use the same shifted final letter as the original keyboard: for example,
+`L` then Shift+`I` executes `LIST`. Abbreviations are expanded by the ROM
+before a line is stored or executed; quoted graphic characters remain graphics.
+
+## Machine-language monitor
+
+`MONITOR` enters the system ROM's hexadecimal monitor. `X` returns to BASIC.
+It accepts `A`/`.` (assemble), `C` (compare), `D` (disassemble), `F` (fill),
+`G` (execute), `H` (hunt bytes or apostrophe-prefixed text), `L` (load PRG),
+`M` (memory dump), `>` (deposit bytes), `R` (registers), `S` (save PRG),
+`T` (transfer), `V` (verify PRG), and `;` (edit saved registers). Assembly and
+disassembly cover the documented 7501 opcodes. `M` and `D` inspect RAM beneath
+ROM when bit 7 of `$07F8` is set. Disk commands use device `8` and the
+directory selected with `--drive`. A target started with `G` can return to the
+monitor with `RTS` or `BRK`.
 
 ## Graphics, sound, and disk commands
 

@@ -269,4 +269,5 @@ fn_spaces
         JMP .again
 .done   STY fn_pos
         RTS
+def_fn_end
 

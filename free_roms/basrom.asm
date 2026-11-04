@@ -92,7 +92,8 @@ column  EQU $27                 ; text column owned by sysrom
 msglo   EQU $22                 ; zero-terminated message pointer
 msghi   EQU $23
 
-entry   LDA #$00
+entry   JSR $c80f               ; expand shifted-letter keyword abbreviations
+        LDA #$00
         STA pos
         STA failed
         STA runmode
@@ -540,6 +541,21 @@ printstmt
         CLC
         ADC #5
         STA pos
+        LDY pos
+        LDA input,Y
+        CMP #35                 ; PRINT# needs an open logical file
+        BNE .screen_print
+        LDA #1
+        STA failed
+        JSR error_to_text
+        LDA #filemsg%256
+        STA msglo
+        LDA #filemsg/256
+        STA msghi
+        JSR printz
+        JSR newline
+        RTS
+.screen_print
         LDA #$00
         STA trail
 .printitem
@@ -1744,6 +1760,7 @@ rampeek_code_end
         INCLUDE "shapes.asm"
 
 errmsg  BYT "?SYNTAX ERROR",0
+filemsg BYT "?FILE NOT OPEN ERROR",0
 typeerr BYT "?TYPE MISMATCH ERROR",0
 quantmsg BYT "?ILLEGAL QUANTITY ERROR",0
 zeromsg BYT "?DIVISION BY ZERO ERROR",0

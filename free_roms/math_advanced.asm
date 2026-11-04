@@ -713,3 +713,4 @@ atn_pi2_fac
 
 atn_half BYT 128,$80,0,0,0,0
 atn_pi4 BYT 128,$c9,$0f,$da,$a2,0
+math_advanced_end
