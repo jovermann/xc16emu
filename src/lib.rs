@@ -3,9 +3,11 @@
 //! Portable C16/Plus/4 hardware core, independent of the desktop interface.
 
 mod cpu;
+mod palette;
 mod sound;
 mod video;
 pub use cpu::Cpu;
+pub use palette::Palette;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -716,30 +718,7 @@ impl Machine {
     /// Convert a TED color number into 24-bit RGB for GUI display.
     /// Arguments: color is the TED palette index. Returns: packed 24-bit RGB.
     pub fn rgb(color: u8) -> u32 {
-        const HUES: [[u8; 3]; 16] = [
-            [0, 0, 0],
-            [255, 255, 255],
-            [255, 0, 0],
-            [0, 255, 255],
-            [127, 0, 255],
-            [0, 255, 0],
-            [0, 0, 255],
-            [255, 255, 0],
-            [255, 128, 0],
-            [128, 128, 0],
-            [128, 255, 0],
-            [200, 0, 200],
-            [0, 255, 128],
-            [0, 128, 255],
-            [0, 32, 255],
-            [128, 255, 128],
-        ];
-        const LEVELS: [u32; 8] = [30, 44, 58, 72, 86, 100, 114, 128];
-        let h = HUES[(color & 15) as usize];
-        let level = LEVELS[((color >> 4) & 7) as usize];
-        ((h[0] as u32 * level / 128) << 16)
-            | ((h[1] as u32 * level / 128) << 8)
-            | (h[2] as u32 * level / 128)
+        Palette::default().rgb(color)
     }
 
     /// Advance TED time at the CPU's fast border and slow display rates.

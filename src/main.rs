@@ -14,7 +14,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-use xc16emu::{matrix_for_char, Machine, PAL_TED_TICKS_PER_SECOND};
+use xc16emu::{matrix_for_char, Machine, Palette, PAL_TED_TICKS_PER_SECOND};
 
 /// One-pixel outline, one-pixel inset, seven-pixel font, and bottom inset.
 const STATUS_HEIGHT: usize = 11;
@@ -33,6 +33,8 @@ const PASTE_ID: usize = 12;
 const DELETE_LINE_ID: usize = 13;
 const GLYPH_TABLE_ID: usize = 14;
 const RUN_STOP_ID: usize = 15;
+const C16_PALETTE_ID: usize = 16;
+const LEGACY_PALETTE_ID: usize = 17;
 
 /// Characters waiting to be delivered through the C16 keyboard matrix.
 #[derive(Default)]
@@ -142,6 +144,7 @@ impl BorderSize {
 struct DesktopSettings {
     zoom: u8,
     border: BorderSize,
+    palette: Palette,
     show_status: bool,
     show_joystick_help: bool,
     fast_mode: bool,
@@ -155,6 +158,7 @@ impl Default for DesktopSettings {
         Self {
             zoom: 2,
             border: BorderSize::Big,
+            palette: Palette::default(),
             show_status: true,
             show_joystick_help: false,
             fast_mode: false,
@@ -189,6 +193,11 @@ impl DesktopSettings {
                         "big" => BorderSize::Big,
                         _ => settings.border,
                     };
+                }
+                "palette" => {
+                    if let Some(palette) = Palette::parse(value.trim_matches('"')) {
+                        settings.palette = palette;
+                    }
                 }
                 "status_bar" => match value {
                     "true" => settings.show_status = true,
@@ -225,8 +234,8 @@ impl DesktopSettings {
             BorderSize::Compact => "compact",
         };
         format!(
-            "zoom = {}\nborder = \"{}\"\nstatus_bar = {}\njoystick_help = {}\nfast_mode = {}\nsound = {}\n",
-            self.zoom, border, self.show_status, self.show_joystick_help, self.fast_mode, self.sound_enabled
+            "zoom = {}\nborder = \"{}\"\npalette = \"{}\"\nstatus_bar = {}\njoystick_help = {}\nfast_mode = {}\nsound = {}\n",
+            self.zoom, border, self.palette.name(), self.show_status, self.show_joystick_help, self.fast_mode, self.sound_enabled
         )
     }
 }
@@ -340,6 +349,7 @@ struct WindowMenus {
     fast_mode_item: MenuItemHandle,
     sound_item: MenuItemHandle,
     joystick_help_item: MenuItemHandle,
+    palette_items: [MenuItemHandle; 2],
 }
 
 impl WindowMenus {
@@ -403,6 +413,7 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         show_joystick_help,
         fast_mode,
         sound_enabled,
+        palette,
     } = settings;
     let machine = macos_menu::new("Machine")?;
     macos_menu::item(machine, "Run/Stop", RUN_STOP_ID)?;
@@ -440,6 +451,11 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         let item = macos_menu::item(view, &format!("Zoom: {choice}×"), id)?;
         set_menu_checked(item, zoom == choice);
     }
+    macos_menu::separator(view);
+    let c16_palette_item = macos_menu::item(view, "Palette: C16colors", C16_PALETTE_ID)?;
+    let legacy_palette_item = macos_menu::item(view, "Palette: Legacy", LEGACY_PALETTE_ID)?;
+    set_menu_checked(c16_palette_item, palette == Palette::C16Colors);
+    set_menu_checked(legacy_palette_item, palette == Palette::Legacy);
     let view_top = macos_menu::attach(view)?;
 
     let window_menu = macos_menu::new("Window")?;
@@ -451,6 +467,7 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         fast_mode_item,
         sound_item,
         joystick_help_item,
+        palette_items: [c16_palette_item, legacy_palette_item],
     })
 }
 
@@ -466,6 +483,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         show_joystick_help,
         fast_mode,
         sound_enabled,
+        palette,
     } = settings;
     let mut machine_menu = Menu::new("Machine").map_err(|e| e.to_string())?;
     machine_menu.add_item("Run/Stop", RUN_STOP_ID).build();
@@ -512,6 +530,15 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         let item = view_menu.add_item(&format!("Zoom: {choice}×"), id).build();
         set_menu_checked(item, zoom == choice);
     }
+    view_menu.add_separator();
+    let c16_palette_item = view_menu
+        .add_item("Palette: C16colors", C16_PALETTE_ID)
+        .build();
+    let legacy_palette_item = view_menu
+        .add_item("Palette: Legacy", LEGACY_PALETTE_ID)
+        .build();
+    set_menu_checked(c16_palette_item, palette == Palette::C16Colors);
+    set_menu_checked(legacy_palette_item, palette == Palette::Legacy);
     let view_handle = window.add_menu(&view_menu);
 
     let window_menu = Menu::new("Window").map_err(|e| e.to_string())?;
@@ -521,6 +548,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         fast_mode_item,
         sound_item,
         joystick_help_item,
+        palette_items: [c16_palette_item, legacy_palette_item],
     })
 }
 
@@ -986,11 +1014,19 @@ fn draw_joystick_help(buffer: &mut [u32], width: usize, video_height: usize) {
 }
 
 /// Scale only the C16 picture; status pixels are composed afterward at 1×.
-/// Arguments: buffer is the output; width is row stride; pixels are TED colors; video_width and zoom set layout. Returns: nothing.
-fn draw_video(buffer: &mut [u32], width: usize, pixels: &[u8], video_width: usize, zoom: usize) {
+/// Arguments: buffer is the output; width is row stride; pixels are TED colors;
+/// video_width and zoom set layout; palette maps TED colors to RGB. Returns: nothing.
+fn draw_video(
+    buffer: &mut [u32],
+    width: usize,
+    pixels: &[u8],
+    video_width: usize,
+    zoom: usize,
+    palette: Palette,
+) {
     for (y, row) in pixels.chunks_exact(video_width).enumerate() {
         for (x, &color) in row.iter().enumerate() {
-            let rgb = Machine::rgb(color);
+            let rgb = palette.rgb(color);
             for dy in 0..zoom {
                 let start = (y * zoom + dy) * width + x * zoom;
                 buffer[start..start + zoom].fill(rgb);
@@ -1226,6 +1262,7 @@ Execution and capture options:
 
 Desktop options:
   --zoom 1|2|4             Set the initial video zoom.
+  --palette NAME           Use c16colors (default) or legacy colors.
   --speed FACTOR           Set the paced emulation speed (default: 1).
   --small-border           Use the compact border.
 
@@ -1259,6 +1296,7 @@ fn run() -> Result<(), String> {
     let mut zoom_override = None;
     let mut speed = 1.0f64;
     let mut border_override = None;
+    let mut palette_override = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--roms" => roms = PathBuf::from(args.next().ok_or("--roms needs a path")?),
@@ -1266,6 +1304,12 @@ fn run() -> Result<(), String> {
             "--dry-run" => dry_run = true,
             "--verbose" | "-v" => verbose = true,
             "--small-border" => border_override = Some(BorderSize::Compact),
+            "--palette" => {
+                let name = args.next().ok_or("--palette needs c16colors or legacy")?;
+                palette_override = Some(Palette::parse(&name).ok_or_else(|| {
+                    format!("unknown palette {name:?}; expected c16colors or legacy")
+                })?);
+            }
             "--zoom" => {
                 let zoom = args
                     .next()
@@ -1406,6 +1450,9 @@ fn run() -> Result<(), String> {
     if let Some(border) = border_override {
         settings.border = border;
     }
+    if let Some(palette) = palette_override {
+        settings.palette = palette;
+    }
     let mut audio = if settings.sound_enabled {
         match AudioOutput::open() {
             Ok(output) => {
@@ -1524,6 +1571,19 @@ fn run() -> Result<(), String> {
                         _ => 4,
                     };
                     recreate_window = true;
+                    persist_settings = true;
+                }
+                C16_PALETTE_ID | LEGACY_PALETTE_ID => {
+                    settings.palette = if id == C16_PALETTE_ID {
+                        Palette::C16Colors
+                    } else {
+                        Palette::Legacy
+                    };
+                    set_menu_checked(
+                        menus.palette_items[0],
+                        settings.palette == Palette::C16Colors,
+                    );
+                    set_menu_checked(menus.palette_items[1], settings.palette == Palette::Legacy);
                     persist_settings = true;
                 }
                 _ => {}
@@ -1673,6 +1733,7 @@ fn run() -> Result<(), String> {
             &pixels,
             video_width,
             settings.zoom as usize,
+            settings.palette,
         );
         if settings.show_joystick_help {
             draw_joystick_help(&mut rgb, width, video_height);
@@ -1812,6 +1873,7 @@ mod tests {
         let settings = DesktopSettings {
             zoom: 4,
             border: BorderSize::Compact,
+            palette: Palette::Legacy,
             show_status: false,
             show_joystick_help: true,
             fast_mode: true,
@@ -1823,6 +1885,7 @@ mod tests {
         );
         assert_eq!(invalid.zoom, 2);
         assert_eq!(invalid.border, BorderSize::Big);
+        assert_eq!(invalid.palette, Palette::C16Colors);
         assert!(invalid.show_status);
         assert!(!invalid.show_joystick_help);
         assert!(!invalid.fast_mode);
@@ -1839,7 +1902,7 @@ mod tests {
         let video_height = 200 * zoom;
         let mut buffer = vec![0; width * (video_height + STATUS_HEIGHT)];
         let pixels = vec![1; 320 * 200];
-        draw_video(&mut buffer, width, &pixels, 320, zoom);
+        draw_video(&mut buffer, width, &pixels, 320, zoom, Palette::default());
         draw_status(&mut buffer, width, video_height, 1.007, 1.0, true);
         assert_eq!(buffer[(video_height - 1) * width], Machine::rgb(1));
         assert!(buffer[video_height * width..(video_height + 1) * width]

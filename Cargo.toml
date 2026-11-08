@@ -20,3 +20,7 @@ path = "src/main.rs"
 [[bin]]
 name = "font-editor"
 path = "src/bin/font-editor.rs"
+
+[[bin]]
+name = "tom-map"
+path = "src/bin/tom-map.rs"

@@ -16,6 +16,7 @@ Features
 - Loading and starting PRG files before or after BASIC boot, and restoring 64 kB frozen images.
 - Headless 40×25 text and 320×200 graphics capture for automated testing.
 - macOS window with adjustable zoom and borders, status display, reset, Fast Mode, and joystick key help.
+- Selectable TED color palettes: the 128 colors sampled from `C16colors.png` by default, or the previous calculated palette.
 - Edit → Paste (⌘V) types clipboard BASIC lines through the emulated keyboard and submits them with Return.
 - Persistent desktop settings in `~/.xc16emu.toml`.
 - Separate `font-editor` executable for editing the 256 glyphs in `free_roms/font.asm`.
@@ -43,6 +44,17 @@ This repository includes independently written ROM images in
 
 ```sh
 ./target/release/xc16emu --roms free_roms
+```
+
+Use `--palette c16colors` (the default) or `--palette legacy` to choose the
+colors at launch. In the desktop window, use **View → Palette: C16colors** or
+**View → Palette: Legacy** to change them;
+the choice is saved in `~/.xc16emu.toml`.
+
+The TOM labyrinth extractor uses the same palette names:
+
+```sh
+./target/release/tom-map --palette c16colors IMAGE OUTPUT.png
 ```
 
 Edit the font source directly with the separate executable:
@@ -102,6 +114,20 @@ or enter `GRAPHIC 1,1` before `DLOAD`. Startup `--type` commands run in order;
 the emulator gives each command time to finish before typing the next one.
 
 `--frozen-image FILE` accepts the legacy 64 KiB frozen-image format.
+
+To extract TOM's complete labyrinth from such an image, build and run the
+separate `tom-map` program:
+
+```sh
+cargo build --release --bin tom-map
+./target/release/tom-map /path/to/tom-frozen-image tom-labyrinth.png
+```
+
+The resulting 4032×2592 PNG contains all 40×25 large map blocks plus one
+12×12-character rock block on every side. It expands the game's two tile
+dictionaries and draws static frames of the original fire, creatures, keys,
+and doors with their TED colors. The extractor reads only the frozen image;
+it does not need ROM files.
 
 Rotating cube demo
 ------------------
