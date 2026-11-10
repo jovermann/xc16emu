@@ -5,9 +5,13 @@
 /// The available mappings from TED color numbers to host RGB.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Palette {
-    /// Samples from the centers of the 16x8 swatches in C16colors.png.
+    /// Samples from the centers of the 16x8 swatches in keep/C16colors.png.
     #[default]
     C16Colors,
+    /// The sampled palette with HSV saturation multiplied by 1.25.
+    C16Colors125,
+    /// The sampled palette with HSV saturation multiplied by 1.5.
+    C16Colors150,
     /// The emulator's original synthetic hue and brightness calculation.
     Legacy,
 }
@@ -18,6 +22,8 @@ impl Palette {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "c16colors" => Some(Self::C16Colors),
+            "c16colors-125" => Some(Self::C16Colors125),
+            "c16colors-150" => Some(Self::C16Colors150),
             "legacy" => Some(Self::Legacy),
             _ => None,
         }
@@ -28,6 +34,8 @@ impl Palette {
     pub fn name(self) -> &'static str {
         match self {
             Self::C16Colors => "c16colors",
+            Self::C16Colors125 => "c16colors-125",
+            Self::C16Colors150 => "c16colors-150",
             Self::Legacy => "legacy",
         }
     }
@@ -37,11 +45,9 @@ impl Palette {
     /// luminance in bits 4-6. Returns: 0xRRGGBB.
     pub fn rgb(self, color: u8) -> u32 {
         match self {
-            Self::C16Colors => {
-                let row = ((color >> 4) & 7) as usize;
-                let column = C16_HUE_COLUMNS[(color & 15) as usize];
-                C16_COLORS[row][column]
-            }
+            Self::C16Colors => sampled_rgb(color),
+            Self::C16Colors125 => boost_saturation(sampled_rgb(color), 5, 4),
+            Self::C16Colors150 => boost_saturation(sampled_rgb(color), 3, 2),
             Self::Legacy => legacy_rgb(color),
         }
     }
@@ -51,7 +57,7 @@ impl Palette {
 // TED's low nibble has a different hue order, hence this column mapping.
 const C16_HUE_COLUMNS: [usize; 16] = [15, 14, 10, 2, 12, 4, 0, 7, 8, 9, 5, 11, 3, 1, 13, 6];
 
-// Exact center-pixel RGB samples from C16colors.png, left to right, top to bottom.
+// Exact center-pixel RGB samples from keep/C16colors.png, left to right, top to bottom.
 const C16_COLORS: [[u32; 16]; 8] = [
     [
         0x27188e, 0x0e2784, 0x00424c, 0x004e0c, 0x004e00, 0x184800, 0x244400, 0x303e00, 0x463000,
@@ -86,6 +92,28 @@ const C16_COLORS: [[u32; 16]; 8] = [
         0xffd9a8, 0xffcfc6, 0xffc4f9, 0xffc4ff, 0xe7cdff, 0xe1e1e1, 0x000000,
     ],
 ];
+
+/// Look up an unchanged RGB sample from the source image.
+/// Arguments: color is a TED color number. Returns: packed 24-bit RGB.
+fn sampled_rgb(color: u8) -> u32 {
+    let row = ((color >> 4) & 7) as usize;
+    let column = C16_HUE_COLUMNS[(color & 15) as usize];
+    C16_COLORS[row][column]
+}
+
+/// Increase HSV saturation while preserving the highest RGB channel (value).
+/// Arguments: rgb is 0xRRGGBB; numerator/denominator is the saturation scale.
+/// Returns: packed RGB, with channels clipped at zero and grays unchanged.
+fn boost_saturation(rgb: u32, numerator: u32, denominator: u32) -> u32 {
+    let red = (rgb >> 16) & 255;
+    let green = (rgb >> 8) & 255;
+    let blue = rgb & 255;
+    let peak = red.max(green).max(blue);
+    let stretch = |channel: u32| {
+        peak.saturating_sub(((peak - channel) * numerator + denominator / 2) / denominator)
+    };
+    (stretch(red) << 16) | (stretch(green) << 8) | stretch(blue)
+}
 
 /// Reproduce the original computed RGB mapping for compatibility.
 /// Arguments: color is a TED color number. Returns: packed 24-bit RGB.
@@ -129,6 +157,25 @@ mod tests {
         assert_eq!(Palette::default().rgb(0x16), 0x36289b);
         assert_eq!(Palette::Legacy.rgb(0x71), 0xffffff);
         assert_eq!(Palette::parse("c16colors"), Some(Palette::C16Colors));
+        assert_eq!(Palette::parse("c16colors-125"), Some(Palette::C16Colors125));
+        assert_eq!(Palette::parse("c16colors-150"), Some(Palette::C16Colors150));
         assert_eq!(Palette::parse("legacy"), Some(Palette::Legacy));
+        assert_eq!(Palette::C16Colors125.rgb(0x71), 0xe1e1e1);
+        assert_eq!(Palette::C16Colors150.rgb(0x00), 0x000000);
+        assert_eq!(Palette::C16Colors125.rgb(0x16), 0x1d0b9b);
+        assert_eq!(Palette::C16Colors150.rgb(0x16), 0x03009b);
+        for color in 0..128 {
+            let channels = |palette: Palette| {
+                let rgb = palette.rgb(color);
+                [(rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255]
+            };
+            let original = channels(Palette::C16Colors);
+            let vivid = channels(Palette::C16Colors125);
+            let bold = channels(Palette::C16Colors150);
+            assert_eq!(original.iter().max(), vivid.iter().max());
+            assert_eq!(original.iter().max(), bold.iter().max());
+            assert!(original.iter().min() >= vivid.iter().min());
+            assert!(vivid.iter().min() >= bold.iter().min());
+        }
     }
 }

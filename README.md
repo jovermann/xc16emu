@@ -16,7 +16,7 @@ Features
 - Loading and starting PRG files before or after BASIC boot, and restoring 64 kB frozen images.
 - Headless 40×25 text and 320×200 graphics capture for automated testing.
 - macOS window with adjustable zoom and borders, status display, reset, Fast Mode, and joystick key help.
-- Selectable TED color palettes: the 128 colors sampled from `C16colors.png` by default, or the previous calculated palette.
+- Selectable TED color palettes: the 128 colors sampled from `keep/C16colors.png` by default, two stronger saturation variants, or the previous calculated palette.
 - Edit → Paste (⌘V) types clipboard BASIC lines through the emulated keyboard and submits them with Return.
 - Persistent desktop settings in `~/.xc16emu.toml`.
 - Separate `font-editor` executable for editing the 256 glyphs in `free_roms/font.asm`.
@@ -46,10 +46,13 @@ This repository includes independently written ROM images in
 ./target/release/xc16emu --roms free_roms
 ```
 
-Use `--palette c16colors` (the default) or `--palette legacy` to choose the
-colors at launch. In the desktop window, use **View → Palette: C16colors** or
-**View → Palette: Legacy** to change them;
-the choice is saved in `~/.xc16emu.toml`.
+Use `--palette c16colors` (the default), `--palette c16colors-125`,
+`--palette c16colors-150`, or `--palette legacy` at launch. All four choices
+are also in the **View** menu, and the desktop choice is saved in
+`~/.xc16emu.toml`. The two numbered variants multiply HSV saturation by 1.25
+and 1.5, capped at 100%, while preserving each color's peak RGB value. The
+mean HSV saturations across the 112 colored swatches are 68.5%, 78.2%, and
+84.6%, respectively; the older synthetic palette averages 96.4%.
 
 The TOM labyrinth extractor uses the same palette names:
 

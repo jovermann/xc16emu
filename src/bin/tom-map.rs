@@ -77,8 +77,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
         println!(
             "tom-map {}  Copyright (C) 2026 Johannes Overmann.\n\
              Extract TOM's full labyrinth from a 64 KiB frozen image.\n\n\
-             Usage: tom-map [--palette c16colors|legacy] IMAGE OUTPUT.png\n\n\
-             --palette   Select RGB colors (default: c16colors).\n\
+             Usage: tom-map [--palette NAME] IMAGE OUTPUT.png\n\n\
+             --palette   c16colors (default), c16colors-125, c16colors-150, or legacy.\n\
              IMAGE       Frozen 64 KiB TOM image.\n\
              OUTPUT.png  Full 4032x2592 labyrinth with rock border and objects.",
             env!("CARGO_PKG_VERSION")
@@ -92,9 +92,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
         if arg == "--palette" {
             let name = options
                 .next()
-                .ok_or("--palette needs c16colors or legacy")?;
-            palette = Palette::parse(&name)
-                .ok_or_else(|| format!("unknown palette {name:?}; expected c16colors or legacy"))?;
+                .ok_or("--palette needs a palette name (see --help)")?;
+            palette = Palette::parse(&name).ok_or_else(|| {
+                format!("unknown palette {name:?}; see --help for available palettes")
+            })?;
         } else if arg.starts_with('-') {
             return Err(format!("unknown option {arg}"));
         } else {
@@ -102,9 +103,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
     }
     if paths.len() != 2 {
-        return Err(
-            "usage: tom-map [--palette c16colors|legacy] IMAGE OUTPUT.png (try --help)".to_string(),
-        );
+        return Err("usage: tom-map [--palette NAME] IMAGE OUTPUT.png (try --help)".to_string());
     }
     let memory = fs::read(&paths[0]).map_err(|e| format!("{}: {e}", paths[0]))?;
     if memory.len() != IMAGE_BYTES {

@@ -35,6 +35,22 @@ const GLYPH_TABLE_ID: usize = 14;
 const RUN_STOP_ID: usize = 15;
 const C16_PALETTE_ID: usize = 16;
 const LEGACY_PALETTE_ID: usize = 17;
+const C16_PALETTE_125_ID: usize = 18;
+const C16_PALETTE_150_ID: usize = 19;
+const PALETTE_CHOICES: [(Palette, &str, usize); 4] = [
+    (Palette::C16Colors, "Palette: C16colors", C16_PALETTE_ID),
+    (
+        Palette::C16Colors125,
+        "Palette: C16colors +25%",
+        C16_PALETTE_125_ID,
+    ),
+    (
+        Palette::C16Colors150,
+        "Palette: C16colors +50%",
+        C16_PALETTE_150_ID,
+    ),
+    (Palette::Legacy, "Palette: Legacy", LEGACY_PALETTE_ID),
+];
 
 /// Characters waiting to be delivered through the C16 keyboard matrix.
 #[derive(Default)]
@@ -349,7 +365,7 @@ struct WindowMenus {
     fast_mode_item: MenuItemHandle,
     sound_item: MenuItemHandle,
     joystick_help_item: MenuItemHandle,
-    palette_items: [MenuItemHandle; 2],
+    palette_items: [MenuItemHandle; 4],
 }
 
 impl WindowMenus {
@@ -452,10 +468,15 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         set_menu_checked(item, zoom == choice);
     }
     macos_menu::separator(view);
-    let c16_palette_item = macos_menu::item(view, "Palette: C16colors", C16_PALETTE_ID)?;
-    let legacy_palette_item = macos_menu::item(view, "Palette: Legacy", LEGACY_PALETTE_ID)?;
-    set_menu_checked(c16_palette_item, palette == Palette::C16Colors);
-    set_menu_checked(legacy_palette_item, palette == Palette::Legacy);
+    let mut palette_items = Vec::with_capacity(PALETTE_CHOICES.len());
+    for (choice, label, id) in PALETTE_CHOICES {
+        let item = macos_menu::item(view, label, id)?;
+        set_menu_checked(item, palette == choice);
+        palette_items.push(item);
+    }
+    let palette_items = palette_items
+        .try_into()
+        .map_err(|_| "palette menu size mismatch")?;
     let view_top = macos_menu::attach(view)?;
 
     let window_menu = macos_menu::new("Window")?;
@@ -467,7 +488,7 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         fast_mode_item,
         sound_item,
         joystick_help_item,
-        palette_items: [c16_palette_item, legacy_palette_item],
+        palette_items,
     })
 }
 
@@ -531,14 +552,15 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         set_menu_checked(item, zoom == choice);
     }
     view_menu.add_separator();
-    let c16_palette_item = view_menu
-        .add_item("Palette: C16colors", C16_PALETTE_ID)
-        .build();
-    let legacy_palette_item = view_menu
-        .add_item("Palette: Legacy", LEGACY_PALETTE_ID)
-        .build();
-    set_menu_checked(c16_palette_item, palette == Palette::C16Colors);
-    set_menu_checked(legacy_palette_item, palette == Palette::Legacy);
+    let mut palette_items = Vec::with_capacity(PALETTE_CHOICES.len());
+    for (choice, label, id) in PALETTE_CHOICES {
+        let item = view_menu.add_item(label, id).build();
+        set_menu_checked(item, palette == choice);
+        palette_items.push(item);
+    }
+    let palette_items = palette_items
+        .try_into()
+        .map_err(|_| "palette menu size mismatch")?;
     let view_handle = window.add_menu(&view_menu);
 
     let window_menu = Menu::new("Window").map_err(|e| e.to_string())?;
@@ -548,7 +570,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         fast_mode_item,
         sound_item,
         joystick_help_item,
-        palette_items: [c16_palette_item, legacy_palette_item],
+        palette_items,
     })
 }
 
@@ -1262,7 +1284,7 @@ Execution and capture options:
 
 Desktop options:
   --zoom 1|2|4             Set the initial video zoom.
-  --palette NAME           Use c16colors (default) or legacy colors.
+  --palette NAME           Use c16colors (default), c16colors-125, c16colors-150, or legacy.
   --speed FACTOR           Set the paced emulation speed (default: 1).
   --small-border           Use the compact border.
 
@@ -1305,9 +1327,11 @@ fn run() -> Result<(), String> {
             "--verbose" | "-v" => verbose = true,
             "--small-border" => border_override = Some(BorderSize::Compact),
             "--palette" => {
-                let name = args.next().ok_or("--palette needs c16colors or legacy")?;
+                let name = args
+                    .next()
+                    .ok_or("--palette needs a palette name (see --help)")?;
                 palette_override = Some(Palette::parse(&name).ok_or_else(|| {
-                    format!("unknown palette {name:?}; expected c16colors or legacy")
+                    format!("unknown palette {name:?}; see --help for available palettes")
                 })?);
             }
             "--zoom" => {
@@ -1573,17 +1597,15 @@ fn run() -> Result<(), String> {
                     recreate_window = true;
                     persist_settings = true;
                 }
-                C16_PALETTE_ID | LEGACY_PALETTE_ID => {
-                    settings.palette = if id == C16_PALETTE_ID {
-                        Palette::C16Colors
-                    } else {
-                        Palette::Legacy
-                    };
-                    set_menu_checked(
-                        menus.palette_items[0],
-                        settings.palette == Palette::C16Colors,
-                    );
-                    set_menu_checked(menus.palette_items[1], settings.palette == Palette::Legacy);
+                C16_PALETTE_ID | C16_PALETTE_125_ID | C16_PALETTE_150_ID | LEGACY_PALETTE_ID => {
+                    settings.palette = PALETTE_CHOICES
+                        .iter()
+                        .find(|(_, _, choice_id)| *choice_id == id)
+                        .unwrap()
+                        .0;
+                    for (index, (choice, _, _)) in PALETTE_CHOICES.iter().enumerate() {
+                        set_menu_checked(menus.palette_items[index], settings.palette == *choice);
+                    }
                     persist_settings = true;
                 }
                 _ => {}
@@ -1891,6 +1913,10 @@ mod tests {
         assert!(!invalid.fast_mode);
         assert!(invalid.sound_enabled);
         assert!(DesktopSettings::parse_toml("free_run = true").fast_mode);
+        for palette in [Palette::C16Colors125, Palette::C16Colors150] {
+            let parsed = DesktopSettings::parse_toml(&format!("palette = \"{}\"", palette.name()));
+            assert_eq!(parsed.palette, palette);
+        }
     }
 
     #[test]
