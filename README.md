@@ -16,6 +16,7 @@ Features
 - Loading and starting PRG files before or after BASIC boot, and restoring 64 kB frozen images.
 - Headless 40×25 text and 320×200 graphics capture for automated testing.
 - macOS window with adjustable zoom and borders, status display, reset, Fast Mode, and joystick key help.
+- A compact toolbar for Fast Mode, sound, and a non-modal Colors window with live brightness and contrast controls.
 - Selectable TED color palettes: the 128 colors sampled from `keep/C16colors.png` by default, two stronger saturation variants, or the previous calculated palette.
 - Edit → Paste (⌘V) types clipboard BASIC lines through the emulated keyboard and submits them with Return.
 - Persistent desktop settings in `~/.xc16emu.toml`.
@@ -53,6 +54,12 @@ are also in the **View** menu, and the desktop choice is saved in
 and 1.5, capped at 100%, while preserving each color's peak RGB value. The
 mean HSV saturations across the 112 colored swatches are 68.5%, 78.2%, and
 84.6%, respectively; the older synthetic palette averages 96.4%.
+
+The toolbar's **Colors** button opens a separate window with a preview of the
+121 distinct TED colors. Drag **Brightness** (-100% to +100%) or **Contrast**
+(50% to 200%) to adjust the simulator display immediately. The original
+palette values remain intact, and the controls are saved with the other desktop
+settings. Fast Mode and Sound can also be toggled from the toolbar.
 
 The TOM labyrinth extractor uses the same palette names:
 

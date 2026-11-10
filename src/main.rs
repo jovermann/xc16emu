@@ -23,6 +23,11 @@ use xc16emu::{matrix_for_char, Machine, Palette, PAL_TED_TICKS_PER_SECOND};
 
 /// One-pixel outline, one-pixel inset, seven-pixel font, and bottom inset.
 const STATUS_HEIGHT: usize = 11;
+const TOOLBAR_HEIGHT: usize = 27;
+const COLOR_DIALOG_WIDTH: usize = 360;
+const COLOR_DIALOG_HEIGHT: usize = 260;
+const SLIDER_START: usize = 20;
+const SLIDER_END: usize = 340;
 const RESET_ID: usize = 1;
 const FAST_MODE_ID: usize = 2;
 const STATUS_ID: usize = 3;
@@ -281,6 +286,8 @@ struct DesktopSettings {
     zoom: u8,
     border: BorderSize,
     palette: Palette,
+    brightness: i16,
+    contrast: u16,
     show_status: bool,
     show_joystick_help: bool,
     fast_mode: bool,
@@ -295,6 +302,8 @@ impl Default for DesktopSettings {
             zoom: 2,
             border: BorderSize::Big,
             palette: Palette::default(),
+            brightness: 0,
+            contrast: 100,
             show_status: true,
             show_joystick_help: false,
             fast_mode: false,
@@ -335,6 +344,20 @@ impl DesktopSettings {
                         settings.palette = palette;
                     }
                 }
+                "brightness" => {
+                    if let Ok(brightness) = value.parse::<i16>() {
+                        if (-100..=100).contains(&brightness) {
+                            settings.brightness = brightness;
+                        }
+                    }
+                }
+                "contrast" => {
+                    if let Ok(contrast) = value.parse::<u16>() {
+                        if (50..=200).contains(&contrast) {
+                            settings.contrast = contrast;
+                        }
+                    }
+                }
                 "status_bar" => match value {
                     "true" => settings.show_status = true,
                     "false" => settings.show_status = false,
@@ -370,10 +393,22 @@ impl DesktopSettings {
             BorderSize::Compact => "compact",
         };
         format!(
-            "zoom = {}\nborder = \"{}\"\npalette = \"{}\"\nstatus_bar = {}\njoystick_help = {}\nfast_mode = {}\nsound = {}\n",
-            self.zoom, border, self.palette.name(), self.show_status, self.show_joystick_help, self.fast_mode, self.sound_enabled
+            "zoom = {}\nborder = \"{}\"\npalette = \"{}\"\nbrightness = {}\ncontrast = {}\nstatus_bar = {}\njoystick_help = {}\nfast_mode = {}\nsound = {}\n",
+            self.zoom, border, self.palette.name(), self.brightness, self.contrast, self.show_status, self.show_joystick_help, self.fast_mode, self.sound_enabled
         )
     }
+}
+
+/// Apply display brightness and contrast after palette lookup.
+/// Arguments: rgb is one packed palette color; brightness is -100..100;
+/// contrast is 50..200 percent. Returns: adjusted packed RGB, clipped to 8 bits.
+fn adjust_rgb(rgb: u32, brightness: i16, contrast: u16) -> u32 {
+    let channel = |shift| {
+        let source = ((rgb >> shift) & 255u32) as i32;
+        let contrasted = 128 + (source - 128) * contrast as i32 / 100;
+        (contrasted * (100 + brightness as i32) / 100).clamp(0, 255) as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
 /// Locate the per-user settings file from HOME.
@@ -507,15 +542,7 @@ impl WindowMenus {
 /// Build the window and its menus for the current desktop settings.
 /// Arguments: settings controls the display. Returns: window and menu handles or an error.
 fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), String> {
-    let DesktopSettings {
-        zoom,
-        border,
-        show_status,
-        ..
-    } = settings;
-    let (video_width, video_height) = border.dimensions();
-    let width = video_width * zoom as usize;
-    let height = video_height * zoom as usize + usize::from(show_status) * STATUS_HEIGHT;
+    let (width, height) = frame_dimensions(settings);
     let mut window = Window::new(
         "XC16EMU Rust",
         width,
@@ -537,6 +564,18 @@ fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), Str
     Ok((window, menus))
 }
 
+/// Compute the exact host framebuffer size for one desktop configuration.
+/// Arguments: settings supplies border, zoom, and status visibility. Returns:
+/// width and height including the unscaled toolbar and optional status line.
+fn frame_dimensions(settings: DesktopSettings) -> (usize, usize) {
+    let (video_width, video_height) = settings.border.dimensions();
+    let width = video_width * settings.zoom as usize;
+    let height = TOOLBAR_HEIGHT
+        + video_height * settings.zoom as usize
+        + usize::from(settings.show_status) * STATUS_HEIGHT;
+    (width, height)
+}
+
 /// On macOS, attach Machine and View without minifb's `add_menu`, which
 /// incorrectly designates each one as AppKit's Window menu.
 #[cfg(target_os = "macos")]
@@ -551,6 +590,7 @@ fn build_menus(_window: &mut Window, settings: DesktopSettings) -> Result<Window
         fast_mode,
         sound_enabled,
         palette,
+        ..
     } = settings;
     let machine = macos_menu::new("Machine")?;
     macos_menu::item(machine, "Run/Stop", RUN_STOP_ID)?;
@@ -626,6 +666,7 @@ fn build_menus(window: &mut Window, settings: DesktopSettings) -> Result<WindowM
         fast_mode,
         sound_enabled,
         palette,
+        ..
     } = settings;
     let mut machine_menu = Menu::new("Machine").map_err(|e| e.to_string())?;
     machine_menu.add_item("Run/Stop", RUN_STOP_ID).build();
@@ -942,6 +983,18 @@ mod macos_menu {
         }
     }
 
+    /// Bring an existing modeless dialog forward when its toolbar button is used.
+    /// Arguments: window is the native NSWindow pointer. Returns: nothing.
+    pub fn focus_window(window: Object) {
+        unsafe {
+            message_1(
+                window,
+                sel_registerName(c"makeKeyAndOrderFront:".as_ptr()),
+                std::ptr::null_mut(),
+            );
+        }
+    }
+
     /// Catch menu setup regressions during desktop development. System Window
     /// commands may grow later, but must never land in Machine or View.
     /// Arguments: machine, edit, view, and window are native menu pointers. Returns: nothing; debug assertions may fail.
@@ -1074,8 +1127,14 @@ fn status_glyph(character: char) -> [u8; 7] {
         'X' => [
             0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
         ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
         ':' => [0, 0b00100, 0b00100, 0, 0b00100, 0b00100, 0],
         '.' => [0, 0, 0, 0, 0, 0b00100, 0b00100],
+        '+' => [0, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        '%' => [0b11001, 0b11010, 0b00100, 0b01000, 0b10110, 0b00110, 0],
         '0' => [
             0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
         ],
@@ -1124,6 +1183,291 @@ fn draw_status_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: 
     }
 }
 
+/// Fill a rectangular UI area without changing the emulator's video pixels.
+/// Arguments: buffer is a packed RGB frame; width is its stride; x/y and w/h
+/// locate the rectangle; color is packed RGB. Returns: nothing.
+fn fill_ui_rect(
+    buffer: &mut [u32],
+    width: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: u32,
+) {
+    for row in y..y + h {
+        buffer[row * width + x..row * width + x + w].fill(color);
+    }
+}
+
+/// One of the fixed toolbar buttons above the emulated video.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolbarAction {
+    Fast,
+    Sound,
+    Colors,
+}
+
+/// Resolve a left-click in the unscaled toolbar to one command.
+/// Arguments: position is a window-relative mouse coordinate. Returns: the
+/// clicked button, or None outside all three controls.
+fn toolbar_action(position: (f32, f32)) -> Option<ToolbarAction> {
+    if !(5.0..23.0).contains(&position.1) {
+        return None;
+    }
+    match position.0 {
+        x if (8.0..84.0).contains(&x) => Some(ToolbarAction::Fast),
+        x if (92.0..168.0).contains(&x) => Some(ToolbarAction::Sound),
+        x if (176.0..260.0).contains(&x) => Some(ToolbarAction::Colors),
+        _ => None,
+    }
+}
+
+/// Draw a compact host toolbar whose controls stay one pixel per UI pixel.
+/// Arguments: buffer is the window frame; width is its stride; settings set
+/// the button states; colors_open marks the dialog button. Returns: nothing.
+fn draw_toolbar(buffer: &mut [u32], width: usize, settings: DesktopSettings, colors_open: bool) {
+    fill_ui_rect(buffer, width, 0, 0, width, TOOLBAR_HEIGHT, 0x1b2028);
+    fill_ui_rect(buffer, width, 0, TOOLBAR_HEIGHT - 1, width, 1, 0x59616c);
+    for (x, w, label, active) in [
+        (8, 76, "FAST", settings.fast_mode),
+        (92, 76, "SOUND", settings.sound_enabled),
+        (176, 84, "COLORS", colors_open),
+    ] {
+        fill_ui_rect(
+            buffer,
+            width,
+            x,
+            5,
+            w,
+            18,
+            if active { 0x294e70 } else { 0x303843 },
+        );
+        fill_ui_rect(
+            buffer,
+            width,
+            x,
+            5,
+            w,
+            1,
+            if active { 0x69a9dc } else { 0x69727e },
+        );
+        fill_ui_rect(buffer, width, x, 22, w, 1, 0x10151a);
+        let label_x = x + (w - label.len() * 6 + 1) / 2;
+        draw_status_text(
+            buffer,
+            width,
+            label_x,
+            10,
+            label,
+            if active { 0xffffff } else { 0xcbd3dc },
+        );
+    }
+}
+
+/// Identify the slider currently held by the mouse in the Colors window.
+#[derive(Clone, Copy)]
+enum ColorSlider {
+    Brightness,
+    Contrast,
+}
+
+/// A separate non-modal host window for live palette adjustments.
+struct ColorsDialog {
+    window: Window,
+    dragging: Option<ColorSlider>,
+    frame: Vec<u32>,
+}
+
+impl ColorsDialog {
+    /// Create and position the dialog near the emulator without blocking it.
+    /// Arguments: main is the simulator window. Returns: the dialog or an error.
+    fn new(main: &Window) -> Result<Self, String> {
+        let mut window = Window::new(
+            "Colors",
+            COLOR_DIALOG_WIDTH,
+            COLOR_DIALOG_HEIGHT,
+            WindowOptions {
+                scale: Scale::X1,
+                resize: false,
+                ..WindowOptions::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        let (x, y) = main.get_position();
+        window.set_position(x + 40, y + 40);
+        window.set_target_fps(60);
+        Ok(Self {
+            window,
+            dragging: None,
+            // minifb's macOS MTKView retains this pointer until its next
+            // draw, which can happen after update_with_buffer returns.
+            frame: vec![0; COLOR_DIALOG_WIDTH * COLOR_DIALOG_HEIGHT],
+        })
+    }
+
+    /// Process one mouse step and redraw the controls and 121-color preview.
+    /// Arguments: self owns the dialog; settings receives live adjustments.
+    /// Returns: None if closed, otherwise whether values changed or a drag ended.
+    fn update(&mut self, settings: &mut DesktopSettings) -> Result<Option<(bool, bool)>, String> {
+        if !self.window.is_open() || self.window.is_key_down(Key::Escape) {
+            return Ok(None);
+        }
+        let down = self.window.get_mouse_down(MouseButton::Left);
+        let position = self.window.get_mouse_pos(MouseMode::Pass);
+        let was_dragging = self.dragging.is_some();
+        if down && self.dragging.is_none() {
+            if let Some((_, y)) = position {
+                self.dragging = if (56.0..82.0).contains(&y) {
+                    Some(ColorSlider::Brightness)
+                } else if (105.0..131.0).contains(&y) {
+                    Some(ColorSlider::Contrast)
+                } else {
+                    None
+                };
+            }
+        }
+        let mut changed = false;
+        if down {
+            if let (Some(slider), Some((x, _))) = (self.dragging, position) {
+                let t = ((x - SLIDER_START as f32) / (SLIDER_END - SLIDER_START) as f32)
+                    .clamp(0.0, 1.0);
+                match slider {
+                    ColorSlider::Brightness => {
+                        let value = slider_value(t, -100, 100) as i16;
+                        changed = settings.brightness != value;
+                        settings.brightness = value;
+                    }
+                    ColorSlider::Contrast => {
+                        let value = slider_value(t, 50, 200) as u16;
+                        changed = settings.contrast != value;
+                        settings.contrast = value;
+                    }
+                }
+            }
+        } else {
+            self.dragging = None;
+        }
+        render_colors_dialog(*settings, &mut self.frame);
+        self.window
+            .update_with_buffer(&self.frame, COLOR_DIALOG_WIDTH, COLOR_DIALOG_HEIGHT)
+            .map_err(|e| e.to_string())?;
+        Ok(Some((changed, was_dragging && !down)))
+    }
+}
+
+/// Convert a clamped slider position to a whole-number percentage.
+/// Arguments: t is normalized 0..1 position; min/max bound the control.
+/// Returns: the nearest integer setting within the control range.
+fn slider_value(t: f32, min: i32, max: i32) -> i32 {
+    min + (t.clamp(0.0, 1.0) * (max - min) as f32).round() as i32
+}
+
+/// Render the slider window and one swatch for each distinct TED color.
+/// Arguments: settings supplies the palette and live adjustments; frame is
+/// the persistent 360x260 RGB buffer. Returns: nothing; the buffer is filled.
+fn render_colors_dialog(settings: DesktopSettings, mut frame: &mut [u32]) {
+    frame.fill(0x171d25);
+    draw_status_text(
+        &mut frame,
+        COLOR_DIALOG_WIDTH,
+        20,
+        14,
+        "121 COLORS",
+        0xe5ebf2,
+    );
+    draw_color_slider(
+        &mut frame,
+        "BRIGHTNESS",
+        40,
+        settings.brightness as i32,
+        -100,
+        100,
+    );
+    draw_color_slider(
+        &mut frame,
+        "CONTRAST",
+        89,
+        settings.contrast as i32,
+        50,
+        200,
+    );
+    draw_status_text(
+        &mut frame,
+        COLOR_DIALOG_WIDTH,
+        20,
+        137,
+        "PALETTE PREVIEW",
+        0xaebbc9,
+    );
+    for row in 0..8 {
+        for hue in 1..16 {
+            let rgb = adjust_rgb(
+                settings.palette.rgb((row * 16 + hue) as u8),
+                settings.brightness,
+                settings.contrast,
+            );
+            fill_ui_rect(
+                &mut frame,
+                COLOR_DIALOG_WIDTH,
+                20 + (hue - 1) * 20,
+                153 + row * 11,
+                19,
+                10,
+                rgb,
+            );
+        }
+    }
+    let black = adjust_rgb(
+        settings.palette.rgb(0),
+        settings.brightness,
+        settings.contrast,
+    );
+    fill_ui_rect(&mut frame, COLOR_DIALOG_WIDTH, 320, 153, 20, 20, black);
+    draw_status_text(&mut frame, COLOR_DIALOG_WIDTH, 315, 181, "BLACK", 0xaebbc9);
+    draw_status_text(
+        &mut frame,
+        COLOR_DIALOG_WIDTH,
+        20,
+        247,
+        "CHANGES APPLY LIVE",
+        0x8d9aaa,
+    );
+}
+
+/// Draw one labeled slider with its numeric percentage.
+/// Arguments: frame is the dialog RGB buffer; label names the control; y is
+/// the label row; value lies between min and max. Returns: nothing.
+fn draw_color_slider(frame: &mut [u32], label: &str, y: usize, value: i32, min: i32, max: i32) {
+    draw_status_text(frame, COLOR_DIALOG_WIDTH, 20, y, label, 0xcbd5df);
+    let value_text = if min < 0 {
+        format!("{value:+}%")
+    } else {
+        format!("{value}%")
+    };
+    draw_status_text(frame, COLOR_DIALOG_WIDTH, 275, y, &value_text, 0xffffff);
+    fill_ui_rect(
+        frame,
+        COLOR_DIALOG_WIDTH,
+        SLIDER_START,
+        y + 23,
+        SLIDER_END - SLIDER_START,
+        4,
+        0x465361,
+    );
+    let x = SLIDER_START
+        + ((value - min) as usize * (SLIDER_END - SLIDER_START) / (max - min) as usize);
+    fill_ui_rect(
+        frame,
+        COLOR_DIALOG_WIDTH,
+        x.saturating_sub(4),
+        y + 17,
+        9,
+        16,
+        0x83c7f3,
+    );
+}
+
 /// Draw the same pixel font at twice its native size for readable help text.
 /// Arguments: buffer is the output; width is row stride; x/y are origin; text is content; color is RGB. Returns: nothing.
 fn draw_help_text(buffer: &mut [u32], width: usize, x: usize, y: usize, text: &str, color: u32) {
@@ -1148,7 +1492,7 @@ fn draw_joystick_help(buffer: &mut [u32], width: usize, video_height: usize) {
     const PANEL_WIDTH: usize = 280;
     const PANEL_HEIGHT: usize = 190;
     let x = (width - PANEL_WIDTH) / 2;
-    let y = (video_height - PANEL_HEIGHT) / 2;
+    let y = TOOLBAR_HEIGHT + (video_height - PANEL_HEIGHT) / 2;
     for row in y..y + PANEL_HEIGHT {
         let pixels = &mut buffer[row * width + x..row * width + x + PANEL_WIDTH];
         pixels.fill(if row == y || row == y + PANEL_HEIGHT - 1 {
@@ -1178,20 +1522,25 @@ fn draw_joystick_help(buffer: &mut [u32], width: usize, video_height: usize) {
 
 /// Scale only the C16 picture; status pixels are composed afterward at 1×.
 /// Arguments: buffer is the output; width is row stride; pixels are TED colors;
-/// video_width and zoom set layout; palette maps TED colors to RGB. Returns: nothing.
+/// video_width and zoom set layout; palette and brightness/contrast map TED
+/// colors to RGB. Returns: nothing; pixels start below the toolbar.
 fn draw_video(
     buffer: &mut [u32],
     width: usize,
     pixels: &[u8],
     video_width: usize,
     zoom: usize,
-    palette: Palette,
+    settings: DesktopSettings,
 ) {
     for (y, row) in pixels.chunks_exact(video_width).enumerate() {
         for (x, &color) in row.iter().enumerate() {
-            let rgb = palette.rgb(color);
+            let rgb = adjust_rgb(
+                settings.palette.rgb(color),
+                settings.brightness,
+                settings.contrast,
+            );
             for dy in 0..zoom {
-                let start = (y * zoom + dy) * width + x * zoom;
+                let start = (TOOLBAR_HEIGHT + y * zoom + dy) * width + x * zoom;
                 buffer[start..start + zoom].fill(rgb);
             }
         }
@@ -1634,6 +1983,10 @@ fn run() -> Result<(), String> {
         None
     };
     let mut charset_combo_was_down = false;
+    // minifb keeps the supplied pointer for asynchronous Metal draws. Keep
+    // this allocation alive and at a fixed address for the window's lifetime.
+    let (frame_width, frame_height) = frame_dimensions(settings);
+    let mut rgb = vec![0u32; frame_width * frame_height];
     let (mut window, mut menus) = create_window(settings)?;
     if !config_path.exists() {
         save_settings(&config_path, settings);
@@ -1655,6 +2008,8 @@ fn run() -> Result<(), String> {
         Arc::clone(&input),
         speed,
     );
+    let mut colors_dialog: Option<ColorsDialog> = None;
+    let mut color_settings_dirty = false;
     #[cfg(target_os = "macos")]
     let mut activate_after_first_event = true;
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -1666,6 +2021,8 @@ fn run() -> Result<(), String> {
         let mut recreate_window = false;
         let mut persist_settings = false;
         let mut toggle_fast_mode = false;
+        let mut toggle_sound = false;
+        let mut open_colors = false;
         if let Some(id) = window.is_menu_pressed() {
             match id {
                 RUN_STOP_ID => {
@@ -1714,31 +2071,7 @@ fn run() -> Result<(), String> {
                     paste.append_key(3); // Clear text, retaining the line number.
                     paste.append_key(1); // Submit that number to delete the record.
                 }
-                SOUND_ID => {
-                    if settings.sound_enabled {
-                        machine
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .set_audio_sample_rate(0);
-                        *audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                        settings.sound_enabled = false;
-                        persist_settings = true;
-                    } else {
-                        match AudioOutput::open() {
-                            Ok(output) => {
-                                machine
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .set_audio_sample_rate(output.sample_rate());
-                                *audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(output);
-                                settings.sound_enabled = true;
-                                persist_settings = true;
-                            }
-                            Err(error) => eprintln!("sound unavailable: {error}"),
-                        }
-                    }
-                    set_menu_checked(menus.sound_item, settings.sound_enabled);
-                }
+                SOUND_ID => toggle_sound = true,
                 STATUS_ID => {
                     settings.show_status = !settings.show_status;
                     recreate_window = true;
@@ -1788,23 +2121,81 @@ fn run() -> Result<(), String> {
             }
         }
         let left_down = window.get_mouse_down(MouseButton::Left);
-        if left_down && !left_was_down && settings.show_status {
-            let (_, video_height) = settings.border.dimensions();
-            if window
-                .get_mouse_pos(MouseMode::Discard)
-                .is_some_and(|position| {
-                    realtime_text_hit(
-                        position,
-                        video_height * settings.zoom as usize,
-                        mips,
-                        realtime,
-                    )
-                })
-            {
-                toggle_fast_mode = true;
+        if left_down && !left_was_down {
+            if let Some(position) = window.get_mouse_pos(MouseMode::Discard) {
+                match toolbar_action(position) {
+                    Some(ToolbarAction::Fast) => toggle_fast_mode = true,
+                    Some(ToolbarAction::Sound) => toggle_sound = true,
+                    Some(ToolbarAction::Colors) => open_colors = true,
+                    None if settings.show_status => {
+                        let (_, video_height) = settings.border.dimensions();
+                        if realtime_text_hit(
+                            position,
+                            TOOLBAR_HEIGHT + video_height * settings.zoom as usize,
+                            mips,
+                            realtime,
+                        ) {
+                            toggle_fast_mode = true;
+                        }
+                    }
+                    None => {}
+                }
             }
         }
         left_was_down = left_down;
+        if toggle_sound {
+            if settings.sound_enabled {
+                machine
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .set_audio_sample_rate(0);
+                *audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                settings.sound_enabled = false;
+                persist_settings = true;
+            } else {
+                match AudioOutput::open() {
+                    Ok(output) => {
+                        machine
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .set_audio_sample_rate(output.sample_rate());
+                        *audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(output);
+                        settings.sound_enabled = true;
+                        persist_settings = true;
+                    }
+                    Err(error) => eprintln!("sound unavailable: {error}"),
+                }
+            }
+            set_menu_checked(menus.sound_item, settings.sound_enabled);
+        }
+        if open_colors && colors_dialog.is_none() {
+            colors_dialog = Some(ColorsDialog::new(&window)?);
+        } else if open_colors {
+            #[cfg(target_os = "macos")]
+            if let Some(dialog) = colors_dialog.as_ref() {
+                macos_menu::focus_window(dialog.window.get_window_handle());
+            }
+        }
+        let mut close_colors = false;
+        if let Some(dialog) = colors_dialog.as_mut() {
+            match dialog.update(&mut settings)? {
+                None => close_colors = true,
+                Some((changed, released)) => {
+                    color_settings_dirty |= changed;
+                    if released && color_settings_dirty {
+                        persist_settings = true;
+                        color_settings_dirty = false;
+                    }
+                }
+            }
+        }
+        if close_colors {
+            colors_dialog = None;
+            if color_settings_dirty {
+                persist_settings = true;
+                color_settings_dirty = false;
+            }
+        }
         if toggle_fast_mode {
             settings.fast_mode = !settings.fast_mode;
             input.fast_mode.store(settings.fast_mode, Ordering::Relaxed);
@@ -1824,6 +2215,8 @@ fn run() -> Result<(), String> {
             // menus explicitly before replacing the window.
             menus.remove(&mut window);
             drop(window);
+            let (new_width, new_height) = frame_dimensions(settings);
+            rgb = vec![0u32; new_width * new_height];
             (window, menus) = create_window(settings)?;
             window.set_position(position.0, position.1);
             #[cfg(target_os = "macos")]
@@ -1931,8 +2324,11 @@ fn run() -> Result<(), String> {
         let (video_width, video_height) = settings.border.dimensions();
         let width = video_width * settings.zoom as usize;
         let video_height = video_height * settings.zoom as usize;
-        let height = video_height + usize::from(settings.show_status) * STATUS_HEIGHT;
-        let mut rgb = vec![0u32; width * height];
+        let status_top = TOOLBAR_HEIGHT + video_height;
+        let height = status_top + usize::from(settings.show_status) * STATUS_HEIGHT;
+        debug_assert_eq!(rgb.len(), width * height);
+        rgb.fill(0);
+        draw_toolbar(&mut rgb, width, settings, colors_dialog.is_some());
         let pixels = machine
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1943,7 +2339,7 @@ fn run() -> Result<(), String> {
             &pixels,
             video_width,
             settings.zoom as usize,
-            settings.palette,
+            settings,
         );
         if settings.show_joystick_help {
             draw_joystick_help(&mut rgb, width, video_height);
@@ -1952,7 +2348,7 @@ fn run() -> Result<(), String> {
             draw_status(
                 &mut rgb,
                 width,
-                video_height,
+                status_top,
                 mips,
                 realtime,
                 settings.sound_enabled,
@@ -1968,6 +2364,9 @@ fn run() -> Result<(), String> {
             macos_menu::activate();
             activate_after_first_event = false;
         }
+    }
+    if color_settings_dirty {
+        save_settings(&config_path, settings);
     }
     Ok(())
 }
@@ -2093,6 +2492,8 @@ mod tests {
             zoom: 4,
             border: BorderSize::Compact,
             palette: Palette::Legacy,
+            brightness: 35,
+            contrast: 125,
             show_status: false,
             show_joystick_help: true,
             fast_mode: true,
@@ -2105,6 +2506,8 @@ mod tests {
         assert_eq!(invalid.zoom, 2);
         assert_eq!(invalid.border, BorderSize::Big);
         assert_eq!(invalid.palette, Palette::C16Colors);
+        assert_eq!(invalid.brightness, 0);
+        assert_eq!(invalid.contrast, 100);
         assert!(invalid.show_status);
         assert!(!invalid.show_joystick_help);
         assert!(!invalid.fast_mode);
@@ -2113,6 +2516,59 @@ mod tests {
         for palette in [Palette::C16Colors125, Palette::C16Colors150] {
             let parsed = DesktopSettings::parse_toml(&format!("palette = \"{}\"", palette.name()));
             assert_eq!(parsed.palette, palette);
+        }
+        let invalid_color = DesktopSettings::parse_toml("brightness = 150\ncontrast = 20\n");
+        assert_eq!((invalid_color.brightness, invalid_color.contrast), (0, 100));
+    }
+
+    #[test]
+    /// Verify color controls brighten highlights and leave defaults unchanged.
+    /// Arguments: none. Returns: nothing; assertions fail on color regressions.
+    fn toolbar_and_color_adjustments() {
+        assert_eq!(toolbar_action((20.0, 10.0)), Some(ToolbarAction::Fast));
+        assert_eq!(toolbar_action((110.0, 10.0)), Some(ToolbarAction::Sound));
+        assert_eq!(toolbar_action((200.0, 10.0)), Some(ToolbarAction::Colors));
+        assert_eq!(toolbar_action((20.0, TOOLBAR_HEIGHT as f32)), None);
+        assert_eq!(slider_value(0.0, -100, 100), -100);
+        assert_eq!(slider_value(0.5, -100, 100), 0);
+        assert_eq!(slider_value(1.0, 50, 200), 200);
+        assert_eq!(adjust_rgb(0x7dcc96, 0, 100), 0x7dcc96);
+        assert_eq!(adjust_rgb(0xe1e1e1, 100, 100), 0xffffff);
+        assert_eq!(adjust_rgb(0x000000, 100, 100), 0x000000);
+        assert_eq!(adjust_rgb(0x406080, 0, 200), 0x004080);
+        let mut settings = DesktopSettings::default();
+        let mut toolbar = vec![0u32; 336 * TOOLBAR_HEIGHT];
+        draw_toolbar(&mut toolbar, 336, settings, false);
+        assert_eq!(toolbar[0], 0x1b2028);
+        let mut dialog_frame = vec![0; COLOR_DIALOG_WIDTH * COLOR_DIALOG_HEIGHT];
+        let address = dialog_frame.as_ptr();
+        render_colors_dialog(settings, &mut dialog_frame);
+        assert_eq!(
+            dialog_frame[153 * COLOR_DIALOG_WIDTH + 20],
+            settings.palette.rgb(1)
+        );
+        assert_eq!(
+            dialog_frame[153 * COLOR_DIALOG_WIDTH + 320],
+            settings.palette.rgb(0)
+        );
+        let original_swatch = dialog_frame[153 * COLOR_DIALOG_WIDTH + 20];
+        settings.brightness = 100;
+        render_colors_dialog(settings, &mut dialog_frame);
+        assert_eq!(dialog_frame.as_ptr(), address);
+        assert_ne!(dialog_frame[153 * COLOR_DIALOG_WIDTH + 20], original_swatch);
+        for label in [
+            "FAST",
+            "SOUND",
+            "COLORS",
+            "BRIGHTNESS",
+            "CONTRAST",
+            "PALETTE PREVIEW",
+            "CHANGES APPLY LIVE",
+        ] {
+            assert!(label
+                .chars()
+                .filter(|c| *c != ' ')
+                .all(|c| status_glyph(c) != [0; 7]));
         }
     }
 
@@ -2123,26 +2579,31 @@ mod tests {
         let zoom = 4;
         let width = 320 * zoom;
         let video_height = 200 * zoom;
-        let mut buffer = vec![0; width * (video_height + STATUS_HEIGHT)];
+        let status_top = TOOLBAR_HEIGHT + video_height;
+        let mut buffer = vec![0; width * (status_top + STATUS_HEIGHT)];
         let pixels = vec![1; 320 * 200];
-        draw_video(&mut buffer, width, &pixels, 320, zoom, Palette::default());
-        draw_status(&mut buffer, width, video_height, 1.007, 1.0, true);
-        assert_eq!(buffer[(video_height - 1) * width], Machine::rgb(1));
-        assert!(buffer[video_height * width..(video_height + 1) * width]
+        draw_video(
+            &mut buffer,
+            width,
+            &pixels,
+            320,
+            zoom,
+            DesktopSettings::default(),
+        );
+        draw_status(&mut buffer, width, status_top, 1.007, 1.0, true);
+        assert_eq!(buffer[(status_top - 1) * width], Machine::rgb(1));
+        assert!(buffer[status_top * width..(status_top + 1) * width]
             .iter()
             .all(|&pixel| pixel == 0x555555));
-        assert_eq!(buffer[(video_height + 1) * width + 1], 0);
-        assert_eq!(buffer[(video_height + 2) * width + 4], 0);
-        assert_eq!(buffer[(video_height + 2) * width + 10], 0x888888);
-        assert_eq!(buffer[(video_height + 9) * width + 10], 0);
-        assert_eq!(buffer[(video_height + 10) * width + 10], 0x555555);
-        assert_eq!(
-            buffer[(video_height + 2) * width + width - 20 + 2],
-            0xffffff
-        );
-        let mut muted = vec![0; width * (video_height + STATUS_HEIGHT)];
-        draw_status(&mut muted, width, video_height, 1.007, 1.0, false);
-        assert_eq!(muted[(video_height + 2) * width + width - 20 + 2], 0x888888);
+        assert_eq!(buffer[(status_top + 1) * width + 1], 0);
+        assert_eq!(buffer[(status_top + 2) * width + 4], 0);
+        assert_eq!(buffer[(status_top + 2) * width + 10], 0x888888);
+        assert_eq!(buffer[(status_top + 9) * width + 10], 0);
+        assert_eq!(buffer[(status_top + 10) * width + 10], 0x555555);
+        assert_eq!(buffer[(status_top + 2) * width + width - 20 + 2], 0xffffff);
+        let mut muted = vec![0; width * (status_top + STATUS_HEIGHT)];
+        draw_status(&mut muted, width, status_top, 1.007, 1.0, false);
+        assert_eq!(muted[(status_top + 2) * width + width - 20 + 2], 0x888888);
     }
 
     #[test]
@@ -2183,11 +2644,11 @@ mod tests {
     fn joystick_help_fits_compact_video_and_leaves_status_clear() {
         let width = 336;
         let video_height = 216;
-        let mut buffer = vec![0x123456; width * (video_height + STATUS_HEIGHT)];
+        let mut buffer = vec![0x123456; width * (TOOLBAR_HEIGHT + video_height + STATUS_HEIGHT)];
         draw_joystick_help(&mut buffer, width, video_height);
-        assert!(buffer[..width * video_height].contains(&0xffffff));
-        assert!(buffer[..width * video_height].contains(&0x7fc5ff));
-        assert!(buffer[width * video_height..]
+        assert!(buffer[..width * (TOOLBAR_HEIGHT + video_height)].contains(&0xffffff));
+        assert!(buffer[..width * (TOOLBAR_HEIGHT + video_height)].contains(&0x7fc5ff));
+        assert!(buffer[width * (TOOLBAR_HEIGHT + video_height)..]
             .iter()
             .all(|&pixel| pixel == 0x123456));
         for label in [
