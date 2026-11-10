@@ -12,6 +12,11 @@ use std::{
     collections::VecDeque,
     env, fs,
     path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, AtomicU8, Ordering},
+        Arc, Mutex,
+    },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 use xc16emu::{matrix_for_char, Machine, Palette, PAL_TED_TICKS_PER_SECOND};
@@ -51,6 +56,110 @@ const PALETTE_CHOICES: [(Palette, &str, usize); 4] = [
     ),
     (Palette::Legacy, "Palette: Legacy", LEGACY_PALETTE_ID),
 ];
+
+/// Keep the emulated CPU and audio producer running while AppKit tracks menus.
+struct EmulatorWorker {
+    running: Arc<AtomicBool>,
+    error: Arc<Mutex<Option<String>>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl EmulatorWorker {
+    /// Start one independent PAL frame producer.
+    /// Arguments: machine and audio are shared with the UI; input carries
+    /// live keyboard and speed-mode state; speed is the paced rate.
+    /// Returns: a worker that stops and joins when dropped.
+    fn start(
+        machine: Arc<Mutex<Machine>>,
+        audio: Arc<Mutex<Option<AudioOutput>>>,
+        input: Arc<WorkerInput>,
+        speed: f64,
+    ) -> Self {
+        let running = Arc::new(AtomicBool::new(true));
+        let error = Arc::new(Mutex::new(None));
+        let thread_running = Arc::clone(&running);
+        let thread_error = Arc::clone(&error);
+        let thread = std::thread::spawn(move || {
+            let mut next_frame = Instant::now();
+            let mut was_fast = input.fast_mode.load(Ordering::Relaxed);
+            while thread_running.load(Ordering::Relaxed) {
+                let fast = input.fast_mode.load(Ordering::Relaxed);
+                if fast != was_fast {
+                    next_frame = Instant::now();
+                    was_fast = fast;
+                }
+                let (ticks, samples) = {
+                    let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+                    let before = machine.ted.ticks;
+                    let mut paste = input.paste.lock().unwrap_or_else(|e| e.into_inner());
+                    paste.step(&mut machine);
+                    let queued_shift = paste
+                        .active
+                        .is_some_and(|(_, shifted)| shifted && (1..=2).contains(&paste.phase));
+                    drop(paste);
+                    machine.set_key(15, input.host_shift.load(Ordering::Relaxed) || queued_shift);
+                    let stop_frames = input
+                        .run_stop_frames
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                            Some(count.saturating_sub(1))
+                        })
+                        .unwrap_or(0);
+                    machine.set_key(
+                        63,
+                        stop_frames > 0 || input.run_stop_held.load(Ordering::Relaxed),
+                    );
+                    if let Err(message) = machine.run_frames(1) {
+                        *thread_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
+                        break;
+                    }
+                    if fast {
+                        let keys = input.held_keys.lock().unwrap_or_else(|e| e.into_inner());
+                        release_fast_mode_keys(&mut machine, keys.iter().copied());
+                    }
+                    (machine.ted.ticks - before, machine.drain_audio_samples())
+                };
+                if let Some(output) = audio.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    output.push(samples);
+                }
+                if fast {
+                    next_frame = Instant::now();
+                    std::thread::yield_now();
+                } else {
+                    next_frame += Duration::from_secs_f64(
+                        ticks as f64 / PAL_TED_TICKS_PER_SECOND as f64 / speed,
+                    );
+                    if let Some(wait) = next_frame.checked_duration_since(Instant::now()) {
+                        std::thread::sleep(wait);
+                    } else {
+                        next_frame = Instant::now();
+                    }
+                }
+            }
+        });
+        Self {
+            running,
+            error,
+            thread: Some(thread),
+        }
+    }
+
+    /// Report an emulation failure to the window loop.
+    /// Arguments: self owns the error slot. Returns: an error, if one occurred.
+    fn error(&self) -> Option<String> {
+        self.error.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl Drop for EmulatorWorker {
+    /// Stop and join the producer before shared machine and audio state go away.
+    /// Arguments: self owns the thread. Returns: nothing.
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
 
 /// Characters waiting to be delivered through the C16 keyboard matrix.
 #[derive(Default)]
@@ -126,6 +235,17 @@ impl PasteQueue {
         self.pending.clear();
         self.phase = 0;
     }
+}
+
+/// UI inputs consumed at emulated frame boundaries, including during a menu.
+#[derive(Default)]
+struct WorkerInput {
+    paste: Mutex<PasteQueue>,
+    held_keys: Mutex<Vec<Key>>,
+    fast_mode: AtomicBool,
+    host_shift: AtomicBool,
+    run_stop_frames: AtomicU8,
+    run_stop_held: AtomicBool,
 }
 
 /// The border widths are measured in emulator pixels on every side.
@@ -409,10 +529,11 @@ fn create_window(settings: DesktopSettings) -> Result<(Window, WindowMenus), Str
         },
     )
     .map_err(|e| e.to_string())?;
-    // The emulator's own PAL pacing controls the default rate. In Fast Mode,
-    // minifb must also avoid its independent update-loop rate limit.
-    window.set_target_fps(0);
+    // The CPU has its own clock thread. The UI only needs display-rate refresh.
+    window.set_target_fps(60);
     let menus = build_menus(&mut window, settings)?;
+    #[cfg(target_os = "macos")]
+    macos_menu::activate();
     Ok((window, menus))
 }
 
@@ -801,6 +922,26 @@ mod macos_menu {
         }
     }
 
+    /// Activate the app synchronously after its menus have been attached.
+    /// Arguments: none. Returns: nothing; AppKit shows the menu bar at launch.
+    pub fn activate() {
+        unsafe {
+            // minifb activates through an asynchronous main-queue callback.
+            // Its manually pumped event loop need not run that callback before
+            // the user first reaches the menu bar.
+            message_bool(
+                application(),
+                sel_registerName(c"activateIgnoringOtherApps:".as_ptr()),
+                1,
+            );
+            message_bool(
+                objc_getClass(c"NSMenu".as_ptr()),
+                sel_registerName(c"setMenuBarVisible:".as_ptr()),
+                1,
+            );
+        }
+    }
+
     /// Catch menu setup regressions during desktop development. System Window
     /// commands may grow later, but must never land in Machine or View.
     /// Arguments: machine, edit, view, and window are native menu pointers. Returns: nothing; debug assertions may fail.
@@ -810,7 +951,7 @@ mod macos_menu {
             let count = sel_registerName(c"numberOfItems".as_ptr());
             debug_assert_eq!(message_count(machine, count), 5);
             debug_assert_eq!(message_count(edit, count), 2);
-            debug_assert_eq!(message_count(view, count), 10);
+            debug_assert_eq!(message_count(view, count), 16);
             debug_assert_eq!(
                 message_0(application(), sel_registerName(c"windowsMenu".as_ptr())),
                 window
@@ -1477,7 +1618,7 @@ fn run() -> Result<(), String> {
     if let Some(palette) = palette_override {
         settings.palette = palette;
     }
-    let mut audio = if settings.sound_enabled {
+    let audio = if settings.sound_enabled {
         match AudioOutput::open() {
             Ok(output) => {
                 machine.set_audio_sample_rate(output.sample_rate());
@@ -1497,18 +1638,29 @@ fn run() -> Result<(), String> {
     if !config_path.exists() {
         save_settings(&config_path, settings);
     }
-    let mut next_frame = Instant::now();
-    let mut meter_time = next_frame;
+    let mut meter_time = Instant::now();
     let mut meter_instructions = machine.instructions_executed;
     let mut meter_ticks = machine.ted.ticks;
-    let mut paced_ticks = machine.ted.ticks;
     let mut mips = 0.0;
     let mut realtime = 0.0;
     let mut left_was_down = false;
-    let mut paste = PasteQueue::default();
-    let mut run_stop_frames = 0u8;
     let audio_debug = env::var_os("XC16EMU_AUDIO_DEBUG").is_some();
+    let machine = Arc::new(Mutex::new(machine));
+    let audio = Arc::new(Mutex::new(audio));
+    let input = Arc::new(WorkerInput::default());
+    input.fast_mode.store(settings.fast_mode, Ordering::Relaxed);
+    let worker = EmulatorWorker::start(
+        Arc::clone(&machine),
+        Arc::clone(&audio),
+        Arc::clone(&input),
+        speed,
+    );
+    #[cfg(target_os = "macos")]
+    let mut activate_after_first_event = true;
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        if let Some(error) = worker.error() {
+            return Err(error);
+        }
         // A setting that changes the video crop or status area changes the
         // fixed-size minifb buffer, so it requires a new window.
         let mut recreate_window = false;
@@ -1517,25 +1669,38 @@ fn run() -> Result<(), String> {
         if let Some(id) = window.is_menu_pressed() {
             match id {
                 RUN_STOP_ID => {
-                    run_stop_frames = 3;
-                    paste.clear(&mut machine);
+                    input.run_stop_frames.store(3, Ordering::Relaxed);
+                    let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+                    input
+                        .paste
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clear(&mut machine);
                 }
                 RESET_ID => {
-                    paste.clear(&mut machine);
+                    let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+                    input
+                        .paste
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clear(&mut machine);
                     machine.reset();
-                    if let Some(audio) = &audio {
-                        audio.clear();
+                    if let Some(output) = audio.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                        output.clear();
                     }
                     meter_ticks = machine.ted.ticks;
-                    paced_ticks = machine.ted.ticks;
                     meter_instructions = machine.instructions_executed;
                     meter_time = Instant::now();
-                    next_frame = meter_time;
                 }
                 FAST_MODE_ID => toggle_fast_mode = true,
                 PASTE_ID => match clipboard_text() {
                     Ok(Some(text)) => {
-                        if let Err(error) = paste.append(&text) {
+                        if let Err(error) = input
+                            .paste
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .append(&text)
+                        {
                             eprintln!("paste: {error}");
                         }
                     }
@@ -1543,21 +1708,29 @@ fn run() -> Result<(), String> {
                     Err(error) => eprintln!("paste: {error}"),
                 },
                 DELETE_LINE_ID => {
+                    let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut paste = input.paste.lock().unwrap_or_else(|e| e.into_inner());
                     paste.clear(&mut machine);
                     paste.append_key(3); // Clear text, retaining the line number.
                     paste.append_key(1); // Submit that number to delete the record.
                 }
                 SOUND_ID => {
                     if settings.sound_enabled {
-                        machine.set_audio_sample_rate(0);
-                        audio = None;
+                        machine
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .set_audio_sample_rate(0);
+                        *audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
                         settings.sound_enabled = false;
                         persist_settings = true;
                     } else {
                         match AudioOutput::open() {
                             Ok(output) => {
-                                machine.set_audio_sample_rate(output.sample_rate());
-                                audio = Some(output);
+                                machine
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .set_audio_sample_rate(output.sample_rate());
+                                *audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(output);
                                 settings.sound_enabled = true;
                                 persist_settings = true;
                             }
@@ -1577,7 +1750,10 @@ fn run() -> Result<(), String> {
                     persist_settings = true;
                 }
                 GLYPH_TABLE_ID => {
-                    machine.write_glyph_table_to_screen();
+                    machine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .write_glyph_table_to_screen();
                 }
                 BIG_BORDER_ID | MEDIUM_BORDER_ID | COMPACT_BORDER_ID => {
                     settings.border = match id {
@@ -1631,13 +1807,13 @@ fn run() -> Result<(), String> {
         left_was_down = left_down;
         if toggle_fast_mode {
             settings.fast_mode = !settings.fast_mode;
+            input.fast_mode.store(settings.fast_mode, Ordering::Relaxed);
             set_menu_checked(menus.fast_mode_item, settings.fast_mode);
             persist_settings = true;
-            next_frame = Instant::now();
+            let machine = machine.lock().unwrap_or_else(|e| e.into_inner());
             meter_ticks = machine.ted.ticks;
-            paced_ticks = machine.ted.ticks;
             meter_instructions = machine.instructions_executed;
-            meter_time = next_frame;
+            meter_time = Instant::now();
         }
         if persist_settings {
             save_settings(&config_path, settings);
@@ -1650,26 +1826,38 @@ fn run() -> Result<(), String> {
             drop(window);
             (window, menus) = create_window(settings)?;
             window.set_position(position.0, position.1);
+            #[cfg(target_os = "macos")]
+            {
+                activate_after_first_event = true;
+            }
         }
         if window.is_key_pressed(Key::F12, minifb::KeyRepeat::No) {
-            paste.clear(&mut machine);
+            let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+            input
+                .paste
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear(&mut machine);
             machine.reset();
-            if let Some(audio) = &audio {
-                audio.clear();
+            if let Some(output) = audio.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                output.clear();
             }
             meter_ticks = machine.ted.ticks;
-            paced_ticks = machine.ted.ticks;
             meter_instructions = machine.instructions_executed;
             meter_time = Instant::now();
-            next_frame = meter_time;
         }
         let run_stop_pressed = window.is_key_pressed(Key::Pause, minifb::KeyRepeat::No)
             || window.is_key_pressed(Key::F15, minifb::KeyRepeat::No);
         if run_stop_pressed {
             // A short host key event must survive until the ROM next scans the
             // keyboard; macOS may deliver press and release in one UI update.
-            run_stop_frames = 3;
-            paste.clear(&mut machine);
+            input.run_stop_frames.store(3, Ordering::Relaxed);
+            let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+            input
+                .paste
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear(&mut machine);
         }
         let command_down = if cfg!(target_os = "macos") {
             window.is_key_down(Key::LeftSuper) || window.is_key_down(Key::RightSuper)
@@ -1681,62 +1869,59 @@ fn run() -> Result<(), String> {
         let charset_combo_down = shift_down && commodore_down;
         if charset_combo_down && !charset_combo_was_down {
             // Keep queued clipboard keys from delaying the physical shortcut.
-            paste.clear(&mut machine);
+            let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+            input
+                .paste
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear(&mut machine);
         }
         charset_combo_was_down = charset_combo_down;
+        *input.held_keys.lock().unwrap_or_else(|e| e.into_inner()) = window.get_keys();
+        input.host_shift.store(shift_down, Ordering::Relaxed);
+        input.run_stop_held.store(
+            window.is_key_down(Key::Pause) || window.is_key_down(Key::F15),
+            Ordering::Relaxed,
+        );
+        let mut machine_input = machine.lock().unwrap_or_else(|e| e.into_inner());
         for key in window.get_keys_pressed(minifb::KeyRepeat::No) {
             // The host clipboard shortcut belongs to Edit, not the C16 V key.
             if key == Key::V && command_down {
                 continue;
             }
             if let Some(index) = matrix_key(key) {
-                machine.set_key(index, true);
+                machine_input.set_key(index, true);
             }
         }
         for key in window.get_keys_released() {
             if let Some(index) = matrix_key(key) {
-                machine.set_key(index, false);
+                machine_input.set_key(index, false);
             }
         }
         // Deliver RUN/STOP immediately, even when clipboard text is
         // still waiting in the keyboard queue. AppKit can call
         // Break F15 on external keyboards; other backends call it Pause.
-        machine.set_key(
-            63,
-            run_stop_frames > 0 || window.is_key_down(Key::Pause) || window.is_key_down(Key::F15),
-        );
-        paste.step(&mut machine);
-        // Modifier state is sampled every frame. The Cocoa backend can
-        // report a modifier through flagsChanged without a key-down edge.
-        // Preserve Shift held by the paste queue as well as the host key.
-        let queued_shift = paste
-            .active
-            .is_some_and(|(_, shifted)| shifted && (1..=2).contains(&paste.phase));
-        machine.set_key(15, shift_down || queued_shift);
-        machine.set_key(61, commodore_down);
-        machine.run_frames(1)?;
-        if settings.fast_mode {
-            // Host key-down edges still enter the matrix, but a held key
-            // cannot repeat at the accelerated emulated keyboard rate.
-            release_fast_mode_keys(&mut machine, window.get_keys());
-        }
-        run_stop_frames = run_stop_frames.saturating_sub(1);
-        if let Some(audio) = &audio {
-            audio.push(machine.drain_audio_samples());
-        }
+        // The worker applies RUN/STOP and pasted keys at each emulated frame
+        // boundary, so these inputs continue while AppKit tracks a menu.
+        machine_input.set_key(61, commodore_down);
+        drop(machine_input);
         let now = Instant::now();
         let elapsed = now.duration_since(meter_time).as_secs_f64();
+        let (instructions_executed, ted_ticks) = {
+            let machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+            (machine.instructions_executed, machine.ted.ticks)
+        };
         if elapsed >= 0.5 {
-            let instructions = machine.instructions_executed - meter_instructions;
-            let ticks = machine.ted.ticks - meter_ticks;
+            let instructions = instructions_executed - meter_instructions;
+            let ticks = ted_ticks - meter_ticks;
             mips = instructions as f64 / elapsed / 1_000_000.0;
             realtime = ticks as f64 / PAL_TED_TICKS_PER_SECOND as f64 / elapsed;
             meter_time = now;
-            meter_instructions = machine.instructions_executed;
-            meter_ticks = machine.ted.ticks;
+            meter_instructions = instructions_executed;
+            meter_ticks = ted_ticks;
             if audio_debug {
-                if let Some(audio) = &audio {
-                    let (queued, played_nonzero) = audio.debug_counts();
+                if let Some(output) = audio.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    let (queued, played_nonzero) = output.debug_counts();
                     eprintln!(
                         "audio: {queued} queued samples, {played_nonzero} nonzero samples played"
                     );
@@ -1748,7 +1933,10 @@ fn run() -> Result<(), String> {
         let video_height = video_height * settings.zoom as usize;
         let height = video_height + usize::from(settings.show_status) * STATUS_HEIGHT;
         let mut rgb = vec![0u32; width * height];
-        let pixels = machine.pixels_with_border(settings.border.pixels());
+        let pixels = machine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pixels_with_border(settings.border.pixels());
         draw_video(
             &mut rgb,
             width,
@@ -1773,19 +1961,12 @@ fn run() -> Result<(), String> {
         window
             .update_with_buffer(&rgb, width, height)
             .map_err(|e| e.to_string())?;
-        if settings.fast_mode {
-            next_frame = Instant::now();
-            paced_ticks = machine.ted.ticks;
-        } else {
-            let ticks = machine.ted.ticks - paced_ticks;
-            paced_ticks = machine.ted.ticks;
-            next_frame +=
-                Duration::from_secs_f64(ticks as f64 / PAL_TED_TICKS_PER_SECOND as f64 / speed);
-            if let Some(wait) = next_frame.checked_duration_since(Instant::now()) {
-                std::thread::sleep(wait);
-            } else {
-                next_frame = Instant::now();
-            }
+        #[cfg(target_os = "macos")]
+        if activate_after_first_event {
+            // Reassert visibility after the first event pump in case minifb's
+            // deferred activation ran after we attached the menus.
+            macos_menu::activate();
+            activate_after_first_event = false;
         }
     }
     Ok(())
@@ -1861,6 +2042,22 @@ mod tests {
                 "{roms}: {text}"
             );
         }
+    }
+
+    #[test]
+    /// Verify emulation advances while the UI thread does no window work.
+    /// Arguments: none. Returns: nothing; assertions fail if the worker stalls.
+    fn emulator_worker_advances_without_ui_updates() {
+        let machine = Arc::new(Mutex::new(
+            Machine::from_rom_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/free_roms")).unwrap(),
+        ));
+        let audio = Arc::new(Mutex::new(None));
+        let input = Arc::new(WorkerInput::default());
+        let worker = EmulatorWorker::start(Arc::clone(&machine), audio, input, 1.0);
+        std::thread::sleep(Duration::from_millis(75));
+        let frames = machine.lock().unwrap().ted.frames;
+        assert!(frames >= 2, "emulation stopped at {frames} frames");
+        assert!(worker.error().is_none());
     }
 
     #[test]
